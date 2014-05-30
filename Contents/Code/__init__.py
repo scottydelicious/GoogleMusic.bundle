@@ -1,338 +1,304 @@
 import random
+from gmusic import GMusic
 
-from gmusicapi import Webclient, Mobileclient
-from gmusicapi.exceptions import AlreadyLoggedIn, NotLoggedIn
-
-ART = 'art-default.jpg'
-ICON = 'icon-default.png'
-
-################################################################################
+ART     = 'art-default.jpg'
+ICON    = 'icon-default.png'
+PREFIX  = '/music/googlemusic'
+API     = GMusic()
 
 ################################################################################
-# class GMusic(object)                                                         #
-# Description: Class responsible for all operations and connection state       #
-#              tracking.                                                       # 
-# Inputs: none                                                                 #
-# Outputs: none                                                                #
-#                                                                              #
+def Prettify(str):
+    return str.lower().title().replace('_', ' ')
+
 ################################################################################
-class GMusic(object):
-    def __init__(self):
-        self.webclient = Webclient(debug_logging=False)
-        self.mobileclient = Mobileclient(debug_logging=False)
-        self.email = None
-        self.password = None
-        self.mc_authenticated = False
-        self.wc_authenticated = False
-        self.authenticated = False
-        self.device = None
-        self.all_songs = list()
-        self.playlists = list()
-
-    ###########################################################################
-    # Name: authenticate()                                                    #
-    # Description: Attempts to authenticate class Mobileclient and Webclient  #
-    #              instances.                                                 #
-    # Inputs: login credentials: email, password                              #
-    # Outputs: returns True if both Mobileclient and Webclient auth is True   #
-    ###########################################################################
-    def authenticate(self, email=None, password=None):
-        if email:
-            self.email = email
-        if password:
-            self.password = password
-
-        try:
-            Log("Authenticating mobileclient...")
-            self.mc_authenticated = self.mobileclient.login(self.email, self.password)
-        except AlreadyLoggedIn:
-            self.mc_authenticated = True
-
-        try:
-            Log("Authenticating webclient...")
-            self.wc_authenticated = self.webclient.login(self.email, self.password)
-        except AlreadyLoggedIn:
-            self.wc_authenticated = True
-
-        self.authenticated = self.mc_authenticated and self.wc_authenticated
-
-        return self.authenticated
-
-    ###########################################################################
-    # Name: get_all_songs()                                                   #
-    # Description: Returns a list of all songs                                #
-    # Inputs: None                                                            #
-    # Outputs: A list of all the songs a user owns.                           #
-    ###########################################################################
-    def get_all_songs(self):
-        try:
-            self.all_songs = self.mobileclient.get_all_songs()
-        except NotLoggedIn:
-            if self.authenticate():
-                self.all_songs = self.mobileclient.get_all_songs()
-            else:
-                Log("LOGIN FAILURE")
-                return
-
-        return self.all_songs
-
-    def get_all_playlists(self):
-        try:
-            self.playlists = self.mobileclient.get_all_playlist_ids()
-        except NotLoggedIn:
-            if self.authenticate():
-                self.playlists = self.mobileclient.get_all_playlist_ids()
-            else:
-                Log("LOGIN FAILURE")
-                return
-
-        return self.playlists
-
-    def get_stream_url(self, song_id):
-        try:
-            stream_url = self.mobileclient.get_stream_url(song_id)
-        except NotLoggedIn:
-            if self.authenticate():
-                stream_url = self.mobileclient.get_stream_url(song_id)
-            else:
-                Log("LOGIN FAILURE")
-                return
-
-        return stream_url
-
 def Start():
-    Plugin.AddPrefixHandler('/music/googlemusic', MainMenu, L('Title'), ICON, ART)
-
     ObjectContainer.art = R(ART)
     ObjectContainer.title1 = L('Title')
-
     DirectoryObject.thumb = R(ICON)
+    ArtistObject.thumb = R(ICON)
+    AlbumObject.thumb = R(ICON)
+    TrackObject.thumb = R(ICON)
 
+################################################################################
 def ValidatePrefs():
     return True
 
+################################################################################
+@handler(PREFIX, L('Title'), art=ART, thumb=ICON)
 def MainMenu():
-    oc = ObjectContainer()
+    oc = ObjectContainer(title2=L('Title'))
 
-    if not Prefs['email'] or not Prefs['password']:
-        oc.add(PrefsObject(title=L('Prefs Title')))
-        return oc
+    if Prefs['email'] and Prefs['password']:
+        if API.authenticate(Prefs['email'], Prefs['password']):
+            oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
+            oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
+            oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
+            oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
+            oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt')))
 
-    gmusic = GMusicObject()
-    if not gmusic and self.authenticated:       # No gmusic object but we did authenticated
-        oc.add(PrefsObject(title=L('Prefs Title'), summary=L('No mobile devices registered (registration not yet implemented.)')))
-    elif not gmusic:                            # No gmusic object (assume bad password)
-        oc.add(PrefsObject(title=L('Prefs Title'), summary=L('Bad Password')))
-    else:                                       # Gmusic object
-        oc.add(DirectoryObject(key=Callback(PlaylistList), title=L('Playlists')))
-        oc.add(DirectoryObject(key=Callback(SongList), title=L('Shuffle All')))
-        oc.add(DirectoryObject(key=Callback(ArtistList), title=L('Artists')))
-        oc.add(DirectoryObject(key=Callback(AlbumList), title=L('Albums')))
-#        oc.add(InputDirectoryObject(key=Callback(SearchResults), title=L('Search'), prompt=L('Search Prompt')))
-        oc.add(PrefsObject(title=L('Prefs Title')))
+    oc.add(PrefsObject(title=L('Prefs Title')))
+    return oc
+
+################################################################################
+@route(PREFIX + '/showlibrary')
+def LibraryMenu():
+    oc = ObjectContainer(title2=L('My Library'))
+    oc.add(DirectoryObject(key=Callback(LibrarySubMenu, title='Artists'), title=L('Artists')))
+    oc.add(DirectoryObject(key=Callback(LibrarySubMenu, title='Albums'), title=L('Albums')))
+    oc.add(DirectoryObject(key=Callback(ShowSongs, title='Songs'), title=L('Songs')))
+    oc.add(DirectoryObject(key=Callback(LibrarySubMenu, title='Genres'), title=L('Genres')))
+    oc.add(DirectoryObject(key=Callback(ShowSongs, title='Shuffle All', shuffle=True), title=L('Shuffle All')))
 
     return oc
 
-def GMusicObject():
-    gmusic = GMusic()
-    authed = gmusic.authenticate(Prefs['email'], Prefs['password'])
-    if authed:
-        devices = gmusic.webclient.get_registered_devices()
-        for dev in devices:
-            if dev['type'] == 'PHONE':
-                gmusic.device = dev['id'][2:]     # Chop off 0x part of ID
-                break
-        if not gmusic.device:
-            return None
-        return gmusic
+################################################################################
+@route(PREFIX + '/playlistsmenu')
+def PlaylistsMenu():
+    oc = ObjectContainer(title2=L('Playlists'))
+
+    playlists = API.get_all_playlists()
+    for playlist in sorted(playlists, key = lambda x: x.get('name')):
+        if playlist['type'].lower() == 'user_generated':
+            oc.add(DirectoryObject(key=Callback(GetTrackList, name=playlist['name'], id=playlist['id']), title=playlist['name']))
+        else:
+            oc.add(DirectoryObject(key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']), title=playlist['name']))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/stationsmenu')
+def StationsMenu():
+    oc = ObjectContainer(title2=L('Stations'))
+
+    stations = API.get_all_stations()
+    for station in stations:
+        do = DirectoryObject(key=Callback(GetStationTracks, name=station['name'], id=station['id']), title=station['name'])
+        if 'imageUrl' in station:
+            do.thumb = station['imageUrl']
+        oc.add(do)
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/genresmenu')
+def GenresMenu():
+    oc = ObjectContainer(title2=L('Genres'))
+
+    genres = API.get_genres()
+    for genre in genres['genres']:
+        if 'children' in genre:
+            children = genre['children']
+        else:
+            children = None
+        do = DirectoryObject(key=Callback(GenresSubMenu, name=genre['name'], id=genre['id'], children=children), title=genre['name'])
+        if 'images' in genre:
+            do.thumb = genre['images'][0]['url']
+        oc.add(do)
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/searchmenu')
+def SearchMenu(query):
+    oc = ObjectContainer(title2=L('Search'))
+
+    results = API.search_all_access(query)
+    for key, values in results.iteritems():
+        if key == 'song_hits':
+            for song in values:
+                oc.add(GetTrack(song['track'], song['track']['nid']))
+
+        if key == 'artist_hits':
+            for artist in values:
+                artist = artist['artist']
+                artistObj = ArtistObject(
+                    key=Callback(GetArtistInfo, name=artist['name'], id=artist['artistId']),
+                    rating_key=artist['artistId'],
+                    title=artist['name']
+                )
+                if 'artistArtRef' in artist:
+                    artistObj.thumb = artist['artistArtRef']
+
+                oc.add(artistObj)
+
+        if key == 'album_hits':
+            for album in values:
+                album = album['album']
+                albumObj = AlbumObject(
+                    key=Callback(GetAlbumInfo, name=album['name'], id=album['albumId']),
+                    rating_key=album['albumId'],
+                    artist=album['artist'],
+                    title=album['name']
+                )
+
+                if 'albumArtRef' in album:
+                    albumObj.thumb = album['albumArtRef']
+
+                oc.add(albumObj)
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/showartists')
+def LibrarySubMenu(title):
+    oc = ObjectContainer(title2=L(title))
+    items = {}
+
+    if title == 'Artists':
+        items = API.get_all_artists()
+    elif title == 'Albums':
+        items = API.get_all_albums()
+    elif title == 'Genres':
+        items = API.get_all_genres()
+
+    for key, value in items.iteritems():
+        do = DirectoryObject(key=Callback(GetTrackList, name=key, tracks=value), title=key)
+        if 'thumb' in value[0]:
+            do.thumb = value[0]['thumb']
+        oc.add(do)
+
+    oc.objects.sort(key=lambda obj: obj.title)
+    return oc
+
+################################################################################
+@route(PREFIX + '/showsongs', shuffle=bool)
+def ShowSongs(title, shuffle=False):
+    oc = ObjectContainer(title2=L(title))
+
+    songs = API.get_all_songs()
+    for song in sorted(songs, key = lambda x: x.get('title')):
+        oc.add(GetTrack(song, song['id']))
+
+    if shuffle == True:
+        random.shuffle(oc.objects)
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/gettracklist', tracks=dict)
+def GetTrackList(name, id=None, tracks=None):
+    oc = ObjectContainer(title2=name)
+
+    if id and tracks == None:
+        tracks = API.get_all_user_playlist_contents(id)
+
+    for track in tracks:
+        if 'track' in track:
+            data = track['track']
+        else:
+            data = API.get_all_songs(track['trackId'])
+
+        oc.add(GetTrack(data, track['id']))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/getsharedplaylist')
+def GetSharedPlaylist(name, token):
+    oc = ObjectContainer(title2=name)
+
+    tracks = API.get_shared_playlist_contents(token)
+    for track in tracks:
+        oc.add(GetTrack(track['track'], track['trackId']))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/getstationtracks')
+def GetStationTracks(name, id):
+    oc = ObjectContainer(title2=name)
+
+    tracks = API.get_station_tracks(id)
+    for track in tracks:
+        oc.add(GetTrack(track, track['nid']))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/genressubmenu', children=list)
+def GenresSubMenu(name, id, children=None):
+    oc = ObjectContainer(title2=name)
+    oc.add(DirectoryObject(key=Callback(CreateStation, id=id), title='Play ' + name))
+
+    if children != None:
+        for child in children:
+            oc.add(DirectoryObject(key=Callback(CreateStation, id=child), title='Play ' + Prettify(child)))
+    return oc
+
+################################################################################
+@route(PREFIX + '/createstation')
+def CreateStation(id):
+    name = Prettify(id)
+    station = API.create_station(name, id)
+    return GetStationTracks(name=name, id=station)
+
+################################################################################
+@route(PREFIX + '/getartistinfo')
+def GetArtistInfo(name, id):
+    oc = ObjectContainer(title2=name)
+
+    artist = API.get_artist_info(id)
+    for album in sorted(artist['albums'], key = lambda x: x.get('year')):
+        albumObj = AlbumObject(
+            key=Callback(GetAlbumInfo, name=album['name'], id=album['albumId']),
+            rating_key=album['albumId'],
+            artist=album['artist'],
+            title=album['name']
+        )
+
+        if 'albumArtRef' in album:
+            albumObj.thumb = album['albumArtRef']
+
+        oc.add(albumObj)
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/getalbuminfo')
+def GetAlbumInfo(name, id):
+    oc = ObjectContainer(title2=name)
+
+    album = API.get_album_info(id)
+    for track in album['tracks']:
+        oc.add(GetTrack(track, track['nid']))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/gettrack', song=dict)
+def GetTrack(song, key, include_container=False):
+    if 'storeId' in song:
+        id = song['storeId']
     else:
-        return None
-
-@route('/music/googlemusic/gettrack', song=dict, gmusic=object)
-def GetTrack(song, gmusic=None):
-    if not gmusic:
-        gmusic = GMusicObject()
-
-    try:
-        album_art_url = 'http:%s' % song['albumArtUrl']
-    except:
-        album_art_url = None
+        id = song['id']
 
     track = TrackObject(
-        key = song['id'],
-        rating_key = song['id'],
+        key = Callback(GetTrack, song=song, key=key, include_container=True),
+        rating_key = key,
         title = song['title'],
         album = song['album'],
-        #disc = song.get('disc', 0),
         artist = song['artist'],
         duration = int(song['durationMillis']),
-        index = song.get('track', 0),
-        thumb = Resource.ContentsOfURLWithFallback(album_art_url, R(ICON)),
+        index = int(song.get('trackType', 0)),
         items = [
             MediaObject(
-                parts = [PartObject(key=Callback(PlayAudio, song=song, ext='mp3'))], # ext='mp3' is apparently EXTREMELY CRITICAL
+                parts = [PartObject(key=Callback(PlayAudio, id=id, ext='mp3'))],
                 container = Container.MP3,
                 audio_codec = AudioCodec.MP3
             )
         ]
     )
 
-    return track
+    if 'albumArtRef' in song:
+        track.thumb = song['albumArtRef'][0]['url']
 
-@route('/music/googlemusic/playlists')
-def PlaylistList():
-    gmusic = GMusicObject()
-    oc = ObjectContainer(title2=L('Playlists'))
-
-    for playlist in gmusic.mobileclient.get_all_playlists():
-        oc.add(DirectoryObject(key=Callback(GetTrackList, playlist_id=playlist['id'], playlist_name=playlist['name']), title=playlist['name']))
-
-    return oc
-
-@route('/music/googlemusic/gettracklist', playlist_id=str, artist=str, album_id=str, query=str)
-def GetTrackList(playlist_id=None, playlist_name=None, artist=None, album_id=None, query=None):
-    gmusic = GMusicObject()
-
-    t2 = L('Songs')
-    if artist:
-        t2 = artist.title()
-        if album_id:
-            t2 = t2 + ' - ' + album_id.title()
-        t2 = t2 + ' - ' + L('Songs')
-    elif album_id:
-        t2 = album_id.title() + ' - ' + t2
-    elif playlist_name:
-       t2 = playlist_name.title() + ' - ' + t2
-
-    oc = ObjectContainer(title2=t2)
-
-    if playlist_id:
-        Log('PLAYLIST_ID : ' + playlist_id)
-        songs = gmusic.mobileclient.get_all_user_playlist_contents()
+    if include_container:
+        return ObjectContainer(objects=[track])
     else:
-        songs = gmusic.get_all_songs()
+        return track
 
-    for song in songs:
-        if artist and song['artist'].lower() != artist:
-            continue
-        if album_id and song['album'].lower() != album_id:
-            continue
-        if playlist_id and song['playlistId'] != playlist_id:
-            continue
-        track = GetTrack(song, gmusic)
-        oc.add(track)
-
-#    oc.objects.sort(key=lambda obj: (obj.album, obj.disc, obj.index))
-    oc.objects.sort(key=lambda obj: (obj.album, obj.index))
-
-    return oc
-
-@route('/music/googlemusic/artists')
-def ArtistList():
-    gmusic = GMusicObject()
-    oc = ObjectContainer(title2=L('Artists'))
-
-    songs = gmusic.get_all_songs()
-
-    artists = list()
-
-    for song in songs:
-        found = False
-        for artist in artists:
-            # TODO: Consider using artistId
-            if song['artist'] == '' or song['artist'] in artist.itervalues():
-                found = True
-                break
-        if not found:
-            artists.append({
-                'id': song['artist'].lower(),
-                'name': song['artist'],
-            })
-
-    for artist in artists:
-        oc.add(ArtistObject(
-            key = Callback(ShowArtistOptions, artist=artist['id']),
-            rating_key = artist['id'],
-            title = artist['name']
-            # number of tracks by artist
-            # art?
-            # number of albums?
-        ))
-
-    oc.objects.sort(key=lambda obj: obj.title)
-
-    return oc
-
-@route('/music/googlemusic/artists/options', artist=str)
-def ShowArtistOptions(artist):
-    oc = ObjectContainer(title2=artist.title())
-    oc.add(DirectoryObject(key=Callback(AlbumList, artist=artist), title=L('Albums')))
-    oc.add(DirectoryObject(key=Callback(GetTrackList, artist=artist), title=L('All Songs')))
-
-    return oc
-
-@route('/music/googlemusic/albums', artist=str)
-def AlbumList(artist=None):
-    gmusic = GMusicObject()
-    t2 = L('Albums')
-
-    if artist:
-        t2 = artist.title() + ' - ' + t2
-
-    oc = ObjectContainer(title2=t2)
-
-    songs = gmusic.get_all_songs() # TODO: Consider returning filtered list from GMusic class
-
-    albums = list()
-
-    for song in songs:
-        # TODO: Consider using artistId
-        if artist and song['artist'].lower() != artist:
-            continue
-        found = False
-        for album in albums:
-            if song['album'] == '' or song['album'] in album.itervalues():
-                found = True
-                break
-        if not found:
-            album = {
-                'id': song['album'].lower(), # not every song has an albumId so this is the most reliable
-                'title': song['album'],
-                'artist': song['artist'],
-                'thumb': song.get('albumArtUrl', None)
-            }
-            if album['thumb'] is not None:
-                album['thumb'] = "http:%s" % album['thumb']
-            albums.append(album)
-
-    for album in albums:
-        oc.add(AlbumObject(
-            key = Callback(GetTrackList, album_id=album['id']),
-            rating_key = album['id'],
-            title = album['title'],
-            artist = album['artist'],
-            thumb = Resource.ContentsOfURLWithFallback(album['thumb'], R(ICON))
-	))
-
-    oc.objects.sort(key=lambda obj: obj.title)
-
-    return oc
-
-@route('/music/googlemusic/songs')
-def SongList():
-    oc = GetTrackList()
-
-    random.shuffle(oc.objects)
-
-    return oc
-
-@route('/music/googlemusic/search', query=str)
-def SearchResults(query=None):
-    return
-
-@route('/music/googlemusic/songs/play', song=dict)
-def PlayAudio(song=None):
-    gmusic = GMusicObject()
-    song_url = gmusic.mobileclient.get_stream_url(song['id'], gmusic.device)
-
+################################################################################
+@route(PREFIX + '/playaudio')
+def PlayAudio(id):
+    song_url = API.get_stream_url(id)
     return Redirect(song_url)

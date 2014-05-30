@@ -1,16 +1,12 @@
 {
     "Title": "Google Music",
-    "MusicTitle": "Google Music Music",
-
     "Prefs Title": "Preferences",
-
-    "Bad Password": "Could not log you in.  Make sure your username and password are correct and try again.  If your Google account uses two-factor authentication you must generate an application-specific password at https://accounts.google.com/IssuedAuthSubTokens",
-
+    "My Library": "My Library",
     "Playlists": "Playlists",
-    "Artists": "Artists",
-    "Albums": "Albums",
     "Songs": "Songs",
-    "All SongsS": "All Songs",
+    "Shuffle All": "Shuffle All",
+    "Stations": "Stations",
+    "Genres": "Genres",
     "Search": "Search",
     "Search Prompt": "Search for an album, artist or song..."
 }
