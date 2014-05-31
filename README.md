@@ -1,7 +1,7 @@
 GoogleMusic.bundle
 ==================
 
-A Plex plugin for Google Music. An All Access account is required.
+A Plex plugin for Google Music. An All Access account is not required but many of the features will not work without one.
 
 Installation Instructions
 -------------------------
