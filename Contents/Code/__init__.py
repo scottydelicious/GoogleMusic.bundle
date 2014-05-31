@@ -1,10 +1,12 @@
 import random
-from gmusic import GMusic
+from gmusic import GMusic, CallFailure
 
-ART     = 'art-default.jpg'
-ICON    = 'icon-default.png'
-PREFIX  = '/music/googlemusic'
-API     = GMusic()
+ART            = 'art-default.jpg'
+ICON           = 'icon-default.png'
+SEARCH_ICON    = 'icon-search.png'
+PREFS_ICON     = 'icon-prefs.png'
+PREFIX         = '/music/googlemusic'
+API            = GMusic()
 
 ################################################################################
 def Prettify(str):
@@ -34,9 +36,9 @@ def MainMenu():
             oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
             oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
             oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
-            oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt')))
+            oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
 
-    oc.add(PrefsObject(title=L('Prefs Title')))
+    oc.add(PrefsObject(title=L('Prefs Title'), thumb=R(PREFS_ICON)))
     return oc
 
 ################################################################################
@@ -300,5 +302,10 @@ def GetTrack(song, key, include_container=False):
 ################################################################################
 @route(PREFIX + '/playaudio')
 def PlayAudio(id):
-    song_url = API.get_stream_url(id)
+    song_url = ''
+    try:
+        song_url = API.get_stream_url(id)
+    except CallFailure:
+        Log.Debug('Could not play song with id: ' + id)
+
     return Redirect(song_url)

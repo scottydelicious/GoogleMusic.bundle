@@ -1,5 +1,5 @@
 from gmusicapi import Webclient, Mobileclient
-from gmusicapi.exceptions import AlreadyLoggedIn, NotLoggedIn
+from gmusicapi.exceptions import AlreadyLoggedIn, NotLoggedIn, CallFailure
 
 class GMusic(object):
     def __init__(self):
@@ -268,5 +268,7 @@ class GMusic(object):
                 stream_url = self._mobileclient.get_stream_url(id, self._device)
             else:
                 return ''
+        except CallFailure:
+            raise CallFailure('Could not play song with id: ' + id, 'get_stream_url')
 
         return stream_url
