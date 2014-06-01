@@ -300,7 +300,7 @@ def GetTrack(song, key, include_container=False):
         return track
 
 ################################################################################
-@route(PREFIX + '/playaudio')
+@route(PREFIX + '/playaudio.mp3')
 def PlayAudio(id):
     song_url = ''
     try:
