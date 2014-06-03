@@ -1,9 +1,11 @@
 from gmusicapi import Webclient, Mobileclient
+from gmusicapi.protocol import webclient
 from gmusicapi.exceptions import AlreadyLoggedIn, NotLoggedIn, CallFailure
 
 class GMusic(object):
     def __init__(self):
         self.authenticated = False
+        self.all_access = False
         self._device = None
         self._webclient = Webclient(debug_logging=False)
         self._mobileclient = Mobileclient(debug_logging=False)
@@ -23,6 +25,10 @@ class GMusic(object):
                     self._device = dev['id'][2:]
                     break
 
+    def _set_all_access(self):
+        settings = self._webclient._make_call(webclient.GetSettings, '')
+        self.all_access = True if 'isSubscription' in settings['settings'] and settings['settings']['isSubscription'] == True else False
+
     def authenticate(self, email, password):
         try:
             mcauthenticated = self._mobileclient.login(email, password)
@@ -36,6 +42,7 @@ class GMusic(object):
 
         self.authenticated = mcauthenticated and wcauthenticated
         self._get_device_id()
+        self._set_all_access()
         return self.authenticated
 
     def get_all_songs(self, id=None):

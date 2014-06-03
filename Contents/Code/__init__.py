@@ -10,7 +10,7 @@ API            = GMusic()
 
 ################################################################################
 def Prettify(str):
-    return str.lower().title().replace('_', ' ')
+    return str.lower().replace('_', ' ').title()
 
 ################################################################################
 def Start():
@@ -35,8 +35,10 @@ def MainMenu():
             oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
             oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
             oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
-            oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
-            oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
+
+            if API.all_access:
+                oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
+                oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
 
     oc.add(PrefsObject(title=L('Prefs Title'), thumb=R(PREFS_ICON)))
     return oc
@@ -71,6 +73,7 @@ def PlaylistsMenu():
 @route(PREFIX + '/stationsmenu')
 def StationsMenu():
     oc = ObjectContainer(title2=L('Stations'))
+    oc.add(DirectoryObject(key=Callback(GetStationTracks, name=L('Lucky Radio'), id='IFL'), title=L('Lucky Radio')))
 
     stations = API.get_all_stations()
     for station in stations:
@@ -212,7 +215,11 @@ def GetStationTracks(name, id):
 
     tracks = API.get_station_tracks(id)
     for track in tracks:
-        oc.add(GetTrack(track, track['nid']))
+        if API.all_access:
+            id = track['nid']
+        else:
+            id = track['id']
+        oc.add(GetTrack(track, id))
 
     return oc
 
@@ -269,10 +276,8 @@ def GetAlbumInfo(name, id):
 ################################################################################
 @route(PREFIX + '/gettrack', song=dict)
 def GetTrack(song, key, include_container=False):
-    if 'storeId' in song:
-        id = song['storeId']
-    else:
-        id = song['id']
+    storeId = song['storeId'] if 'storeId' in song and API.all_access else ''
+    id = song['id'] if 'id' in song else ''
 
     track = TrackObject(
         key = Callback(GetTrack, song=song, key=key, include_container=True),
@@ -281,10 +286,10 @@ def GetTrack(song, key, include_container=False):
         album = song['album'],
         artist = song['artist'],
         duration = int(song['durationMillis']),
-        index = int(song.get('trackType', 0)),
+        index = int(song.get('trackNumber', 0)),
         items = [
             MediaObject(
-                parts = [PartObject(key=Callback(PlayAudio, id=id, ext='mp3'))],
+                parts = [PartObject(key=Callback(PlayAudio, id=id, storeId=storeId, ext='mp3'))],
                 container = Container.MP3,
                 audio_codec = AudioCodec.MP3
             )
@@ -301,11 +306,13 @@ def GetTrack(song, key, include_container=False):
 
 ################################################################################
 @route(PREFIX + '/playaudio.mp3')
-def PlayAudio(id):
-    song_url = ''
-    try:
+def PlayAudio(id, storeId):
+    if storeId:
+        try:
+            song_url = API.get_stream_url(storeId)
+        except CallFailure:
+            song_url = API.get_stream_url(id)
+    else:
         song_url = API.get_stream_url(id)
-    except CallFailure:
-        Log.Debug('Could not play song with id: ' + id)
 
     return Redirect(song_url)
