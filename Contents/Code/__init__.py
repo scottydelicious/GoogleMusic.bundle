@@ -44,7 +44,7 @@ def MainMenu():
     return oc
 
 ################################################################################
-@route(PREFIX + '/showlibrary')
+@route(PREFIX + '/librarymenu')
 def LibraryMenu():
     oc = ObjectContainer(title2=L('My Library'))
     oc.add(DirectoryObject(key=Callback(LibrarySubMenu, title='Artists'), title=L('Artists')))
@@ -61,12 +61,13 @@ def PlaylistsMenu():
     oc = ObjectContainer(title2=L('Playlists'))
 
     playlists = API.get_all_playlists()
-    for playlist in sorted(playlists, key = lambda x: x.get('name')):
+    for playlist in playlists:
         if playlist['type'].lower() == 'user_generated':
             oc.add(DirectoryObject(key=Callback(GetTrackList, name=playlist['name'], id=playlist['id']), title=playlist['name']))
         else:
             oc.add(DirectoryObject(key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']), title=playlist['name']))
 
+    oc.objects.sort(key=lambda obj: obj.title)
     return oc
 
 ################################################################################
@@ -144,7 +145,7 @@ def SearchMenu(query):
     return oc
 
 ################################################################################
-@route(PREFIX + '/showartists')
+@route(PREFIX + '/librarysubmenu')
 def LibrarySubMenu(title):
     oc = ObjectContainer(title2=L(title))
     items = {}
@@ -171,16 +172,18 @@ def ShowSongs(title, shuffle=False):
     oc = ObjectContainer(title2=L(title))
 
     songs = API.get_all_songs()
-    for song in sorted(songs, key = lambda x: x.get('title')):
+    for song in songs:
         oc.add(GetTrack(song, song['id']))
 
     if shuffle == True:
         random.shuffle(oc.objects)
+    else:
+        oc.objects.sort(key=lambda obj: obj.title)
 
     return oc
 
 ################################################################################
-@route(PREFIX + '/gettracklist', tracks=dict)
+@route(PREFIX + '/gettracklist', tracks=list)
 def GetTrackList(name, id=None, tracks=None):
     oc = ObjectContainer(title2=name)
 
