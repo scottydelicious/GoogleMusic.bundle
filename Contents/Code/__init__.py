@@ -310,6 +310,9 @@ def GetTrack(song, key, include_container=False):
 ################################################################################
 @route(PREFIX + '/playaudio.mp3')
 def PlayAudio(id, storeId):
+    if API.can_stream == False:
+        raise Ex.MediaNotAuthorized
+
     if storeId:
         try:
             song_url = API.get_stream_url(storeId)
