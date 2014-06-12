@@ -219,7 +219,10 @@ def GetStationTracks(name, id):
     tracks = API.get_station_tracks(id)
     for track in tracks:
         if API.all_access:
-            id = track['nid']
+            if 'nid' in track:
+                id = track['nid']
+            else:
+                id = track['id']
         else:
             id = track['id']
         oc.add(GetTrack(track, id))
@@ -310,9 +313,6 @@ def GetTrack(song, key, include_container=False):
 ################################################################################
 @route(PREFIX + '/playaudio.mp3')
 def PlayAudio(id, storeId):
-    if API.can_stream == False:
-        raise Ex.MediaNotAuthorized
-
     if storeId:
         try:
             song_url = API.get_stream_url(storeId)

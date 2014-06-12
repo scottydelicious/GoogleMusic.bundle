@@ -6,7 +6,6 @@ class GMusic(object):
     def __init__(self):
         self.authenticated = False
         self.all_access = False
-        self.can_stream = True
         self._device = None
         self._webclient = Webclient(debug_logging=False)
         self._mobileclient = Mobileclient(debug_logging=False)
@@ -28,8 +27,6 @@ class GMusic(object):
                 elif dev['type'] == 'IOS':
                     self._device = dev['id']
                     break
-                else:
-                    raise CallFailure('No registered devices could be found for your account')
 
     def _set_all_access(self):
         settings = self._webclient._make_call(webclient.GetSettings, '')
@@ -48,12 +45,7 @@ class GMusic(object):
 
         self.authenticated = mcauthenticated and wcauthenticated
         self._set_all_access()
-
-        try:
-            self._get_device_id()
-        except CallFailure:
-            self.can_stream = False
-
+        self._get_device_id()
         return self.authenticated
 
     def get_all_songs(self, id=None):
