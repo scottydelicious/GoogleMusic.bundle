@@ -282,7 +282,7 @@ def GetAlbumInfo(name, id):
 ################################################################################
 @route(PREFIX + '/gettrack', song=dict)
 def GetTrack(song, key, include_container=False):
-    storeId = song['storeId'] if 'storeId' in song and API.all_access else ''
+    storeId = song['storeId'] if 'storeId' in song and API.all_access else 0
     id = song['id'] if 'id' in song else ''
 
     track = TrackObject(
@@ -313,7 +313,7 @@ def GetTrack(song, key, include_container=False):
 ################################################################################
 @route(PREFIX + '/playaudio.mp3')
 def PlayAudio(id, storeId):
-    if storeId:
+    if storeId != 0:
         try:
             song_url = API.get_stream_url(storeId)
         except CallFailure:
