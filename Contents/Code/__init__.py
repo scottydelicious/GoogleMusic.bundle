@@ -44,6 +44,12 @@ def MainMenu():
     return oc
 
 ################################################################################
+@route(PREFIX + '/{menu}/recentlyAdded')
+def RecentlyAdded(menu):
+    title = 'Recently Added'
+    return ObjectContainer(title2=title, header=title, message='No recently items found')
+
+################################################################################
 @route(PREFIX + '/librarymenu')
 def LibraryMenu():
     oc = ObjectContainer(title2=L('My Library'))
