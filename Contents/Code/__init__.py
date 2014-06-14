@@ -289,7 +289,7 @@ def GetAlbumInfo(name, id):
 @route(PREFIX + '/gettrack', song=dict)
 def GetTrack(song, key, include_container=False):
     storeId = song['storeId'] if 'storeId' in song and API.all_access else 0
-    id = song['id'] if 'id' in song else ''
+    id = song['id'] if 'id' in song else 0
 
     track = TrackObject(
         key = Callback(GetTrack, song=song, key=key, include_container=True),
