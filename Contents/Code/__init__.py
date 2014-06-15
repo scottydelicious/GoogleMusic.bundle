@@ -45,7 +45,7 @@ def MainMenu():
 
 ################################################################################
 @route(PREFIX + '/{name}/recentlyAdded')
-def RecentlyAdded(name):
+def RecentlyAdded(name, stack):
     return ObjectContainer(title2=L('Title'))
 
 ################################################################################
