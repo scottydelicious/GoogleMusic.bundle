@@ -7,6 +7,7 @@ SEARCH_ICON    = 'icon-search.png'
 PREFS_ICON     = 'icon-prefs.png'
 PREFIX         = '/music/googlemusic'
 API            = GMusic()
+PAGE_SIZE      = 200
 
 ################################################################################
 def Prettify(str):
@@ -172,18 +173,21 @@ def LibrarySubMenu(title):
     return oc
 
 ################################################################################
-@route(PREFIX + '/showsongs', shuffle=bool)
-def ShowSongs(title, shuffle=False):
+@route(PREFIX + '/showsongs', shuffle=bool, page=int)
+def ShowSongs(title, shuffle=False, page=1):
     oc = ObjectContainer(title2=L(title))
 
     songs = API.get_all_songs()
-    for song in songs:
+    start = (page - 1) * PAGE_SIZE
+    end = start + PAGE_SIZE
+    for song in sorted(songs, key = lambda x: x.get('title'))[start:end]:
         oc.add(GetTrack(song, song['id']))
-
+    
     if shuffle == True:
         random.shuffle(oc.objects)
-    else:
-        oc.objects.sort(key=lambda obj: obj.title)
+        
+    if end < len(songs):
+        oc.add(NextPageObject(key=Callback(ShowSongs, title=title, shuffle=shuffle, page=page+1)))
 
     return oc
 
