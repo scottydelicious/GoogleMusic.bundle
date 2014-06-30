@@ -6,6 +6,7 @@ class GMusic(object):
     def __init__(self):
         self.authenticated = False
         self.all_access = False
+        self.has_songs = False
         self._device = None
         self._webclient = Webclient(debug_logging=False)
         self._mobileclient = Mobileclient(debug_logging=False)
@@ -52,9 +53,11 @@ class GMusic(object):
         if len(self._all_songs) == 0:
             try:
                 self._all_songs = self._mobileclient.get_all_songs()
+                self.has_songs = True
             except NotLoggedIn:
                 if self.authenticate():
                     self._all_songs = self._mobileclient.get_all_songs()
+                    self.has_songs = True
                 else:
                     return []
 

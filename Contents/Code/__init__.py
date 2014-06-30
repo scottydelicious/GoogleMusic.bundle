@@ -27,12 +27,20 @@ def ValidatePrefs():
     return True
 
 ################################################################################
+def GetLibraryAsync():
+    API.get_all_songs()
+
+################################################################################
 @handler(PREFIX, L('Title'), art=ART, thumb=ICON)
 def MainMenu():
     oc = ObjectContainer(title2=L('Title'))
 
     if Prefs['email'] and Prefs['password']:
         if API.authenticate(Prefs['email'], Prefs['password']):
+
+            # Load library asynchronously to avoid timeouts
+            Thread.Create(GetLibraryAsync)
+
             oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
             oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
             oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
@@ -173,23 +181,23 @@ def LibrarySubMenu(title):
     return oc
 
 ################################################################################
-@route(PREFIX + '/showsongs', shuffle=bool, page=int)
-def ShowSongs(title, shuffle=False, page=1):
-    oc = ObjectContainer(title2=L(title))
+@route(PREFIX + '/showsongs', shuffle=bool)
+def ShowSongs(title, shuffle=False):
+    if API.has_songs:
+        oc = ObjectContainer(title2=L(title))
+        songs = API.get_all_songs()
+        for song in songs:
+            oc.add(GetTrack(song, song['id']))
 
-    songs = API.get_all_songs()
-    start = (page - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
-    for song in sorted(songs, key = lambda x: x.get('title'))[start:end]:
-        oc.add(GetTrack(song, song['id']))
-    
-    if shuffle == True:
-        random.shuffle(oc.objects)
-        
-    if end < len(songs):
-        oc.add(NextPageObject(key=Callback(ShowSongs, title=title, shuffle=shuffle, page=page+1)))
+        if shuffle == True:
+            random.shuffle(oc.objects)
+        else:
+            oc.objects.sort(key=lambda obj: obj.title)
 
-    return oc
+        return oc
+
+    else:
+        return ObjectContainer(title2=L(title), header=L(title), message=L('Library is still loading'))
 
 ################################################################################
 @route(PREFIX + '/gettracklist', tracks=list)
