@@ -67,7 +67,7 @@ def PlaylistsMenu():
 
     playlists = API.get_all_playlists()
     for playlist in playlists:
-        if playlist['type'].lower() == 'user_generated':
+        if 'type' in playlist and playlist['type'].lower() == 'user_generated':
             oc.add(DirectoryObject(key=Callback(GetTrackList, name=playlist['name'], id=playlist['id']), title=playlist['name']))
         else:
             oc.add(DirectoryObject(key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']), title=playlist['name']))
