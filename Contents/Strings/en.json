@@ -10,5 +10,6 @@
     "Lucky Radio": "I'm Feeling Lucky Radio",
     "Search": "Search",
     "Search Prompt": "Search for an album, artist or song...",
-    "Library is still loading": "Library is still loading"
+    "Loading": "The library is still being loaded. Please try again in a moment.",
+    "Please Wait": "Please Wait"
 }
