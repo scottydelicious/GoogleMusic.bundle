@@ -23,6 +23,10 @@ def Start():
     ObjectContainer.title1 = L('Title')
     DirectoryObject.thumb = R(ICON)
 
+    if Prefs['email'] and Prefs['password']:
+        if API.authenticate(Prefs['email'], Prefs['password']):
+            Thread.Create(LoadAsync, type='songs')
+
 ################################################################################
 def ValidatePrefs():
     return True
@@ -32,19 +36,14 @@ def ValidatePrefs():
 def MainMenu():
     oc = ObjectContainer(title2=L('Title'))
 
-    if Prefs['email'] and Prefs['password']:
-        if API.authenticate(Prefs['email'], Prefs['password']):
+    if API.authenticated:
+        oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
+        oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
+        oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
 
-            # Loading the library in a seperate thread so that we don't block the UI
-            Thread.Create(LoadAsync, type='songs')
-
-            oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
-            oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
-            oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
-
-            if API.all_access:
-                oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
-                oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
+        if API.all_access:
+            oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
+            oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
 
     oc.add(PrefsObject(title=L('Prefs Title'), thumb=R(PREFS_ICON)))
     return oc
@@ -156,8 +155,8 @@ def SearchMenu(query):
     return oc
 
 ################################################################################
-@route(PREFIX + '/librarysubmenu')
-def LibrarySubMenu(title):
+@route(PREFIX + '/librarysubmenu', page=int)
+def LibrarySubMenu(title, page=1):
     oc = ObjectContainer(title2=L(title))
     items = {}
 
@@ -169,13 +168,17 @@ def LibrarySubMenu(title):
         elif title == 'Genres':
             items = API.get_all_genres()
 
-        for key, value in items.iteritems():
-            do = DirectoryObject(key=Callback(GetTrackList, name=key, tracks=value), title=key)
-            if 'thumb' in value[0]:
-                do.thumb = value[0]['thumb']
+        start = (page - 1) * PAGE_SIZE
+        end = start + PAGE_SIZE
+
+        for key in sorted(items.iterkeys())[start:end]:
+            do = DirectoryObject(key=Callback(GetTrackList, name=key, tracks=items[key]), title=key)
+            if 'thumb' in items[key][0]:
+                do.thumb = items[key][0]['thumb']
             oc.add(do)
 
-        oc.objects.sort(key=lambda obj: obj.title)
+        if end < len(items):
+            oc.add(NextPageObject(key=Callback(LibrarySubMenu, title=title, page=page+1)))
 
     else:
         return ObjectContainer(header=L('Please Wait'), message=L('Loading'))
