@@ -23,10 +23,6 @@ def Start():
     ObjectContainer.title1 = L('Title')
     DirectoryObject.thumb = R(ICON)
 
-    if Prefs['email'] and Prefs['password']:
-        if API.authenticate(Prefs['email'], Prefs['password']):
-            Thread.Create(LoadAsync, type='songs')
-
 ################################################################################
 def ValidatePrefs():
     return True
@@ -35,6 +31,10 @@ def ValidatePrefs():
 @handler(PREFIX, L('Title'), art=ART, thumb=ICON)
 def MainMenu():
     oc = ObjectContainer(title2=L('Title'))
+
+    if API.authenticated == False and Prefs['email'] and Prefs['password']:
+        API.authenticate(Prefs['email'], Prefs['password'])
+        Thread.Create(LoadAsync, type='songs')
 
     if API.authenticated:
         oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
