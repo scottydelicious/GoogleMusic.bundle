@@ -217,12 +217,7 @@ def GetTrackList(name, type):
 
     tracks = API.get_tracks_for_type(type, name)
     for track in tracks:
-        if 'track' in track:
-            data = track['track']
-        else:
-            data = API.get_all_songs(track['trackId'])
-
-        oc.add(GetTrack(data, track['id']))
+        oc.add(GetTrack(track['track'], track['id']))
 
     return oc
 
@@ -237,7 +232,7 @@ def GetPlaylistContents(name, id):
         if 'track' in track:
             data = track['track']
         else:
-            data = API.get_all_songs(track['trackId'])
+            data = API.get_song(track['trackId'])
 
         oc.add(GetTrack(data, track['id']))
 

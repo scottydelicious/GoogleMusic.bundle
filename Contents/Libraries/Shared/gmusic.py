@@ -36,7 +36,7 @@ class GMusic(object):
         settings = self._webclient._make_call(webclient.GetSettings, '')
         self.all_access = True if 'isSubscription' in settings['settings'] and settings['settings']['isSubscription'] == True else False
 
-    def _set_all_songs(self, id=None):
+    def _set_all_songs(self):
         if len(self.all_songs) == 0:
             try:
                 self.all_songs = self._mobileclient.get_all_songs()
@@ -46,8 +46,6 @@ class GMusic(object):
                 else:
                     return []
 
-        if id:
-            return [x for x in self.all_songs if x['id'] == id][0]
         else:
             return self.all_songs
 
@@ -167,7 +165,6 @@ class GMusic(object):
 
     def get_tracks_for_type(self, type, name):
         type = type.lower()
-
         if type == 'artists':
             return self.tracks_by_artist[name]
         elif type == 'albums':
@@ -176,6 +173,9 @@ class GMusic(object):
             return self.tracks_by_genre[name]
         else:
             return {}
+
+    def get_song(self, id):
+        return [x for x in self.all_songs if x['id'] == id][0]
 
     def get_all_playlists(self):
         if len(self._playlists) == 0:
