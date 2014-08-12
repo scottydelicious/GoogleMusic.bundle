@@ -13,9 +13,8 @@ PAGE_SIZE      = 50
 def Prettify(str):
     return str.lower().replace('_', ' ').title()
 
-def LoadAsync(type):
-    if type == 'songs':
-        API.get_all_songs()
+def LoadAsync():
+    API.load_data()
 
 ################################################################################
 def Start():
@@ -34,7 +33,7 @@ def MainMenu():
 
     if API.authenticated == False and Prefs['email'] and Prefs['password']:
         API.authenticate(Prefs['email'], Prefs['password'])
-        Thread.Create(LoadAsync, type='songs')
+        Thread.Create(LoadAsync)
 
     if API.authenticated:
         oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
@@ -73,7 +72,7 @@ def PlaylistsMenu():
     playlists = API.get_all_playlists()
     for playlist in playlists:
         if 'type' in playlist and playlist['type'].lower() == 'user_generated':
-            oc.add(DirectoryObject(key=Callback(GetTrackList, name=playlist['name'], id=playlist['id']), title=playlist['name']))
+            oc.add(DirectoryObject(key=Callback(GetPlaylistContents, name=playlist['name'], id=playlist['id']), title=playlist['name']))
         else:
             oc.add(DirectoryObject(key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']), title=playlist['name']))
 
@@ -160,21 +159,21 @@ def LibrarySubMenu(title, page=1):
     oc = ObjectContainer(title2=L(title))
     items = {}
 
-    if API.songs_loaded:
+    if API.library_loaded:
         if title == 'Artists':
-            items = API.get_all_artists()
+            items = API.artists
         elif title == 'Albums':
-            items = API.get_all_albums()
+            items = API.albums
         elif title == 'Genres':
-            items = API.get_all_genres()
+            items = API.genres
 
         start = (page - 1) * PAGE_SIZE
         end = start + PAGE_SIZE
 
-        for key in sorted(items.iterkeys())[start:end]:
-            do = DirectoryObject(key=Callback(GetTrackList, name=key, tracks=items[key]), title=key)
-            if 'thumb' in items[key][0]:
-                do.thumb = items[key][0]['thumb']
+        for key in sorted(items)[start:end]:
+            do = DirectoryObject(key=Callback(GetTrackList, name=key, type=title), title=key)
+            if items[key]:
+                do.thumb = items[key]
             oc.add(do)
 
         if end < len(items):
@@ -190,8 +189,8 @@ def LibrarySubMenu(title, page=1):
 def ShowSongs(title, shuffle=False, page=1):
     oc = ObjectContainer(title2=L(title))
 
-    if API.songs_loaded:
-        songs = API.get_all_songs()
+    if API.library_loaded:
+        songs = API.all_songs
         start = (page - 1) * PAGE_SIZE
         end = start + PAGE_SIZE
 
@@ -212,12 +211,27 @@ def ShowSongs(title, shuffle=False, page=1):
     return oc
 
 ################################################################################
-@route(PREFIX + '/gettracklist', tracks=list)
-def GetTrackList(name, id=None, tracks=None):
+@route(PREFIX + '/gettracklist')
+def GetTrackList(name, type):
     oc = ObjectContainer(title2=name)
 
-    if id and tracks == None:
-        tracks = API.get_all_user_playlist_contents(id)
+    tracks = API.get_tracks_for_type(type, name)
+    for track in tracks:
+        if 'track' in track:
+            data = track['track']
+        else:
+            data = API.get_all_songs(track['trackId'])
+
+        oc.add(GetTrack(data, track['id']))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/getplaylistcontents')
+def GetPlaylistContents(name, id):
+    oc = ObjectContainer(title2=name)
+
+    tracks = API.get_all_user_playlist_contents(id)
 
     for track in tracks:
         if 'track' in track:
