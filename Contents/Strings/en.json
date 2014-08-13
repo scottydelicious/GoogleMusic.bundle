@@ -9,5 +9,7 @@
     "Genres": "Genres",
     "Lucky Radio": "I'm Feeling Lucky Radio",
     "Search": "Search",
-    "Search Prompt": "Search for an album, artist or song..."
+    "Search Prompt": "Search for an album, artist or song...",
+    "Loading": "The library is still being loaded. Please try again in a moment.",
+    "Please Wait": "Please Wait"
 }

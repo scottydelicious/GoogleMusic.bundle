@@ -6,15 +6,19 @@ class GMusic(object):
     def __init__(self):
         self.authenticated = False
         self.all_access = False
+        self.library_loaded = False
+        self.all_songs = []
+        self.artists = {}
+        self.albums = {}
+        self.genres = {}
+        self.tracks_by_artist = {}
+        self.tracks_by_album = {}
+        self.tracks_by_genre = {}
         self._device = None
         self._webclient = Webclient(debug_logging=False)
         self._mobileclient = Mobileclient(debug_logging=False)
         self._playlists = []
         self._playlist_contents = []
-        self._all_songs = []
-        self._all_artists = {}
-        self._all_albums = {}
-        self._all_genres = {}
         self._stations = []
 
     def _get_device_id(self):
@@ -32,6 +36,110 @@ class GMusic(object):
         settings = self._webclient._make_call(webclient.GetSettings, '')
         self.all_access = True if 'isSubscription' in settings['settings'] and settings['settings']['isSubscription'] == True else False
 
+    def _set_all_songs(self):
+        if len(self.all_songs) == 0:
+            try:
+                self.all_songs = self._mobileclient.get_all_songs()
+            except NotLoggedIn:
+                if self.authenticate():
+                    self.all_songs = self._mobileclient.get_all_songs()
+                else:
+                    return []
+
+        else:
+            return self.all_songs
+
+    def _set_all_artists(self, name=None):
+        if not self.tracks_by_artist:
+            songs = self._set_all_songs()
+            for song in songs:
+                artist = song['artist']
+                thumb = None
+                if artist not in self.tracks_by_artist:
+                    self.tracks_by_artist[artist] = []
+                    self.artists[artist] = None
+
+                track = {'title': song['title'],
+                        'album': song['album'],
+                        'artist': artist,
+                        'durationMillis': song['durationMillis'],
+                        'trackType': song['trackNumber'],
+                        'id': song['id']}
+
+                if 'albumArtRef' in song:
+                    track['albumArtRef'] = song['albumArtRef']
+
+                if 'artistArtRef' in song:
+                    thumb = song['artistArtRef'][0]['url']
+                    self.artists[artist] = thumb
+
+                if 'storeId' in song:
+                    track['storeId'] = song['storeId']
+
+                self.tracks_by_artist[artist].append({'track': track, 'thumb': thumb, 'id': song['id']})
+
+        if name:
+            return self.tracks_by_artist[name]
+
+        return self.tracks_by_artist
+
+    def _set_all_albums(self):
+        if not self.tracks_by_album:
+            songs = self._set_all_songs()
+            for song in songs:
+                album = song['album']
+                thumb = None
+                if album not in self.tracks_by_album:
+                    self.tracks_by_album[album] = []
+                    self.albums[album] = None
+
+                track = {'title': song['title'],
+                        'album': album,
+                        'artist': song['artist'],
+                        'durationMillis': song['durationMillis'],
+                        'trackType': song['trackNumber'],
+                        'id': song['id']}
+
+                if 'albumArtRef' in song:
+                    track['albumArtRef'] = song['albumArtRef']
+                    thumb = song['albumArtRef'][0]['url']
+                    self.albums[album] = thumb
+
+                if 'storeId' in song:
+                    track['storeId'] = song['storeId']
+
+                self.tracks_by_album[album].append({'track': track, 'thumb': thumb, 'id': song['id']})
+
+        return self.tracks_by_album
+
+    def _set_all_genres(self):
+        if not self.tracks_by_genre:
+            songs = self._set_all_songs()
+            for song in songs:
+                genre = song['genre']
+                if genre not in self.tracks_by_genre:
+                    self.tracks_by_genre[genre] = []
+                    self.genres[genre] = None
+
+                track = {'title': song['title'],
+                        'album': song['album'],
+                        'artist': song['artist'],
+                        'durationMillis': song['durationMillis'],
+                        'trackType': song['trackNumber'],
+                        'id': song['id']}
+
+                if 'albumArtRef' in song:
+                    track['albumArtRef'] = song['albumArtRef']
+                    thumb = song['albumArtRef'][0]['url']
+                    self.genres[genre] = thumb
+
+                if 'storeId' in song:
+                    track['storeId'] = song['storeId']
+
+                self.tracks_by_genre[genre].append({'track': track, 'thumb': thumb, 'id': song['id']})
+
+        return self.tracks_by_genre
+
     def authenticate(self, email, password):
         try:
             mcauthenticated = self._mobileclient.login(email, password)
@@ -48,101 +156,26 @@ class GMusic(object):
         self._get_device_id()
         return self.authenticated
 
-    def get_all_songs(self, id=None):
-        if len(self._all_songs) == 0:
-            try:
-                self._all_songs = self._mobileclient.get_all_songs()
-            except NotLoggedIn:
-                if self.authenticate():
-                    self._all_songs = self._mobileclient.get_all_songs()
-                else:
-                    return []
+    def load_data(self):
+        self._set_all_songs()
+        self._set_all_artists()
+        self._set_all_albums()
+        self._set_all_genres()
+        self.library_loaded = True
 
-        if id:
-            return [x for x in self._all_songs if x['id'] == id][0]
+    def get_tracks_for_type(self, type, name):
+        type = type.lower()
+        if type == 'artists':
+            return self.tracks_by_artist[name]
+        elif type == 'albums':
+            return self.tracks_by_album[name]
+        elif type == 'genres':
+            return self.tracks_by_genre[name]
         else:
-            return self._all_songs
+            return {}
 
-    def get_all_artists(self):
-        if not self._all_artists:
-            songs = self.get_all_songs()
-            for song in songs:
-                artist = song['artist']
-                thumb = None
-                if artist not in self._all_artists:
-                    self._all_artists[artist] = []
-
-                track = {'title': song['title'],
-                        'album': song['album'],
-                        'artist': artist,
-                        'durationMillis': song['durationMillis'],
-                        'trackType': song['trackNumber'],
-                        'id': song['id']}
-
-                if 'albumArtRef' in song:
-                    track['albumArtRef'] = song['albumArtRef']
-
-                if 'artistArtRef' in song:
-                    thumb = song['artistArtRef'][0]['url']
-
-                if 'storeId' in song:
-                    track['storeId'] = song['storeId']
-
-                self._all_artists[artist].append({'track': track, 'thumb': thumb, 'id': song['id']})
-
-        return self._all_artists
-
-    def get_all_albums(self):
-        if not self._all_albums:
-            songs = self.get_all_songs()
-            for song in songs:
-                album = song['album']
-                thumb = None
-                if album not in self._all_albums:
-                    self._all_albums[album] = []
-
-                track = {'title': song['title'],
-                        'album': album,
-                        'artist': song['artist'],
-                        'durationMillis': song['durationMillis'],
-                        'trackType': song['trackNumber'],
-                        'id': song['id']}
-
-                if 'albumArtRef' in song:
-                    track['albumArtRef'] = song['albumArtRef']
-                    thumb = song['albumArtRef'][0]['url']
-
-                if 'storeId' in song:
-                    track['storeId'] = song['storeId']
-
-                self._all_albums[album].append({'track': track, 'thumb': thumb, 'id': song['id']})
-
-        return self._all_albums
-
-    def get_all_genres(self):
-        if not self._all_genres:
-            songs = self.get_all_songs()
-            for song in songs:
-                genre = song['genre']
-                if genre not in self._all_genres:
-                    self._all_genres[genre] = []
-
-                track = {'title': song['title'],
-                        'album': song['album'],
-                        'artist': song['artist'],
-                        'durationMillis': song['durationMillis'],
-                        'trackType': song['trackNumber'],
-                        'id': song['id']}
-
-                if 'albumArtRef' in song:
-                    track['albumArtRef'] = song['albumArtRef']
-
-                if 'storeId' in song:
-                    track['storeId'] = song['storeId']
-
-                self._all_genres[genre].append({'track': track, 'id': song['id']})
-
-        return self._all_genres
+    def get_song(self, id):
+        return [x for x in self.all_songs if x['id'] == id][0]
 
     def get_all_playlists(self):
         if len(self._playlists) == 0:

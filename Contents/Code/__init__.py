@@ -7,19 +7,20 @@ SEARCH_ICON    = 'icon-search.png'
 PREFS_ICON     = 'icon-prefs.png'
 PREFIX         = '/music/googlemusic'
 API            = GMusic()
+PAGE_SIZE      = 50
 
 ################################################################################
 def Prettify(str):
     return str.lower().replace('_', ' ').title()
+
+def LoadAsync():
+    API.load_data()
 
 ################################################################################
 def Start():
     ObjectContainer.art = R(ART)
     ObjectContainer.title1 = L('Title')
     DirectoryObject.thumb = R(ICON)
-    ArtistObject.thumb = R(ICON)
-    AlbumObject.thumb = R(ICON)
-    TrackObject.thumb = R(ICON)
 
 ################################################################################
 def ValidatePrefs():
@@ -30,15 +31,18 @@ def ValidatePrefs():
 def MainMenu():
     oc = ObjectContainer(title2=L('Title'))
 
-    if Prefs['email'] and Prefs['password']:
-        if API.authenticate(Prefs['email'], Prefs['password']):
-            oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
-            oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
-            oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
+    if API.authenticated == False and Prefs['email'] and Prefs['password']:
+        API.authenticate(Prefs['email'], Prefs['password'])
+        Thread.Create(LoadAsync)
 
-            if API.all_access:
-                oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
-                oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
+    if API.authenticated:
+        oc.add(DirectoryObject(key=Callback(LibraryMenu), title=L('My Library')))
+        oc.add(DirectoryObject(key=Callback(PlaylistsMenu), title=L('Playlists')))
+        oc.add(DirectoryObject(key=Callback(StationsMenu), title=L('Stations')))
+
+        if API.all_access:
+            oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
+            oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
 
     oc.add(PrefsObject(title=L('Prefs Title'), thumb=R(PREFS_ICON)))
     return oc
@@ -68,7 +72,7 @@ def PlaylistsMenu():
     playlists = API.get_all_playlists()
     for playlist in playlists:
         if 'type' in playlist and playlist['type'].lower() == 'user_generated':
-            oc.add(DirectoryObject(key=Callback(GetTrackList, name=playlist['name'], id=playlist['id']), title=playlist['name']))
+            oc.add(DirectoryObject(key=Callback(GetPlaylistContents, name=playlist['name'], id=playlist['id']), title=playlist['name']))
         else:
             oc.add(DirectoryObject(key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']), title=playlist['name']))
 
@@ -150,56 +154,85 @@ def SearchMenu(query):
     return oc
 
 ################################################################################
-@route(PREFIX + '/librarysubmenu')
-def LibrarySubMenu(title):
+@route(PREFIX + '/librarysubmenu', page=int)
+def LibrarySubMenu(title, page=1):
     oc = ObjectContainer(title2=L(title))
     items = {}
 
-    if title == 'Artists':
-        items = API.get_all_artists()
-    elif title == 'Albums':
-        items = API.get_all_albums()
-    elif title == 'Genres':
-        items = API.get_all_genres()
+    if API.library_loaded:
+        if title == 'Artists':
+            items = API.artists
+        elif title == 'Albums':
+            items = API.albums
+        elif title == 'Genres':
+            items = API.genres
 
-    for key, value in items.iteritems():
-        do = DirectoryObject(key=Callback(GetTrackList, name=key, tracks=value), title=key)
-        if 'thumb' in value[0]:
-            do.thumb = value[0]['thumb']
-        oc.add(do)
+        start = (page - 1) * PAGE_SIZE
+        end = start + PAGE_SIZE
 
-    oc.objects.sort(key=lambda obj: obj.title)
+        for key in sorted(items)[start:end]:
+            do = DirectoryObject(key=Callback(GetTrackList, name=key, type=title), title=key)
+            if items[key]:
+                do.thumb = items[key]
+            oc.add(do)
+
+        if end < len(items):
+            oc.add(NextPageObject(key=Callback(LibrarySubMenu, title=title, page=page+1)))
+
+    else:
+        return ObjectContainer(header=L('Please Wait'), message=L('Loading'))
+
     return oc
 
 ################################################################################
-@route(PREFIX + '/showsongs', shuffle=bool)
-def ShowSongs(title, shuffle=False):
+@route(PREFIX + '/showsongs', shuffle=bool, page=int)
+def ShowSongs(title, shuffle=False, page=1):
     oc = ObjectContainer(title2=L(title))
 
-    songs = API.get_all_songs()
-    for song in songs:
-        oc.add(GetTrack(song, song['id']))
+    if API.library_loaded:
+        songs = API.all_songs
+        start = (page - 1) * PAGE_SIZE
+        end = start + PAGE_SIZE
 
-    if shuffle == True:
-        random.shuffle(oc.objects)
+        if shuffle == True:
+            random.shuffle(songs)
+            for song in songs[start:end]:
+                oc.add(GetTrack(song, song['id']))
+        else:
+            for song in sorted(songs, key = lambda x: x.get('title'))[start:end]:
+                oc.add(GetTrack(song, song['id']))
+
+        if end < len(songs):
+            oc.add(NextPageObject(key=Callback(ShowSongs, title=title, shuffle=shuffle, page=page+1)))
+
     else:
-        oc.objects.sort(key=lambda obj: obj.title)
+        return ObjectContainer(header=L('Please Wait'), message=L('Loading'))
 
     return oc
 
 ################################################################################
-@route(PREFIX + '/gettracklist', tracks=list)
-def GetTrackList(name, id=None, tracks=None):
+@route(PREFIX + '/gettracklist')
+def GetTrackList(name, type):
     oc = ObjectContainer(title2=name)
 
-    if id and tracks == None:
-        tracks = API.get_all_user_playlist_contents(id)
+    tracks = API.get_tracks_for_type(type, name)
+    for track in tracks:
+        oc.add(GetTrack(track['track'], track['id']))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/getplaylistcontents')
+def GetPlaylistContents(name, id):
+    oc = ObjectContainer(title2=name)
+
+    tracks = API.get_all_user_playlist_contents(id)
 
     for track in tracks:
         if 'track' in track:
             data = track['track']
         else:
-            data = API.get_all_songs(track['trackId'])
+            data = API.get_song(track['trackId'])
 
         oc.add(GetTrack(data, track['id']))
 
