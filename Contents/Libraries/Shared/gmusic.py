@@ -117,6 +117,7 @@ class GMusic(object):
             songs = self._set_all_songs()
             for song in songs:
                 genre = song['genre']
+                thumb = None
                 if genre not in self.tracks_by_genre:
                     self.tracks_by_genre[genre] = []
                     self.genres[genre] = None
