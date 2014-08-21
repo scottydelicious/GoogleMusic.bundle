@@ -126,9 +126,8 @@ def SearchMenu(query):
         if key == 'artist_hits':
             for artist in values:
                 artist = artist['artist']
-                artistObj = ArtistObject(
+                artistObj = DirectoryObject(
                     key=Callback(GetArtistInfo, name=artist['name'], id=artist['artistId']),
-                    rating_key=artist['artistId'],
                     title=artist['name']
                 )
                 if 'artistArtRef' in artist:
@@ -139,10 +138,8 @@ def SearchMenu(query):
         if key == 'album_hits':
             for album in values:
                 album = album['album']
-                albumObj = AlbumObject(
+                albumObj = DirectoryObject(
                     key=Callback(GetAlbumInfo, name=album['name'], id=album['albumId']),
-                    rating_key=album['albumId'],
-                    artist=album['artist'],
                     title=album['name']
                 )
 
@@ -292,10 +289,8 @@ def GetArtistInfo(name, id):
 
     artist = API.get_artist_info(id)
     for album in sorted(artist['albums'], key = lambda x: x.get('year')):
-        albumObj = AlbumObject(
+        albumObj = DirectoryObject(
             key=Callback(GetAlbumInfo, name=album['name'], id=album['albumId']),
-            rating_key=album['albumId'],
-            artist=album['artist'],
             title=album['name']
         )
 
