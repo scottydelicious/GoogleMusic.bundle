@@ -213,7 +213,7 @@ def GetTrackList(name, type):
     oc = ObjectContainer(title2=name)
 
     tracks = API.get_tracks_for_type(type, name)
-    for track in tracks:
+    for track in sorted(tracks, key = lambda x: x['track'].get('trackType')):
         oc.add(GetTrack(track['track'], track['id']))
 
     return oc
