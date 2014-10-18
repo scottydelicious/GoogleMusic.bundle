@@ -59,12 +59,22 @@ class GMusic(object):
                     self.tracks_by_artist[artist] = []
                     self.artists[artist] = None
 
-                track = {'title': song['title'],
-                        'album': song['album'],
-                        'artist': artist,
-                        'durationMillis': song['durationMillis'],
-                        'trackType': song['trackNumber'],
-                        'id': song['id']}
+                track = {'artist': artist}
+
+                if 'title' in song:
+                    track['title'] = song['title']
+
+                if 'album' in song:
+                    track['album'] = song['album']
+
+                if 'durationMillis' in song:
+                    track['durationMillis'] = song['durationMillis']
+
+                if 'id' in song:
+                    track['id'] = song['id']
+
+                if 'trackNumber' in song:
+                    track['trackType'] = song['trackNumber']
 
                 if 'albumArtRef' in song:
                     track['albumArtRef'] = song['albumArtRef']
@@ -93,12 +103,22 @@ class GMusic(object):
                     self.tracks_by_album[album] = []
                     self.albums[album] = None
 
-                track = {'title': song['title'],
-                        'album': album,
-                        'artist': song['artist'],
-                        'durationMillis': song['durationMillis'],
-                        'trackType': song['trackNumber'],
-                        'id': song['id']}
+                track = {'album': album}
+
+                if 'title' in song:
+                    track['title'] = song['title']
+
+                if 'artist' in song:
+                    track['artist'] = song['artist']
+
+                if 'durationMillis' in song:
+                    track['durationMillis'] = song['durationMillis']
+
+                if 'id' in song:
+                    track['id'] = song['id']
+
+                if 'trackNumber' in song:
+                    track['trackType'] = song['trackNumber']
 
                 if 'albumArtRef' in song:
                     track['albumArtRef'] = song['albumArtRef']
@@ -126,12 +146,25 @@ class GMusic(object):
                     self.tracks_by_genre[genre] = []
                     self.genres[genre] = None
 
-                track = {'title': song['title'],
-                        'album': song['album'],
-                        'artist': song['artist'],
-                        'durationMillis': song['durationMillis'],
-                        'trackType': song['trackNumber'],
-                        'id': song['id']}
+                track = {}
+
+                if 'title' in song:
+                    track['title'] = song['title']
+
+                if 'album' in song:
+                    track['album'] = song['album']
+
+                if 'artist' in song:
+                    track['artist'] = song['artist']
+
+                if 'durationMillis' in song:
+                    track['durationMillis'] = song['durationMillis']
+
+                if 'id' in song:
+                    track['id'] = song['id']
+
+                if 'trackNumber' in song:
+                    track['trackType'] = song['trackNumber']
 
                 if 'albumArtRef' in song:
                     track['albumArtRef'] = song['albumArtRef']
