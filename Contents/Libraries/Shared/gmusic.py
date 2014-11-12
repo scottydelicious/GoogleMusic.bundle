@@ -341,6 +341,30 @@ class GMusic(object):
 
         return results
 
+    def add_aa_track(self, id):
+        track = None
+        try:
+            track = self._mobileclient.add_aa_track(id)
+        except NotLoggedIn:
+            if self.authenticate():
+                track = self._mobileclient.add_aa_track(id)
+            else:
+                return None
+
+        return track
+
+    def add_songs_to_playlist(self, playlist_id, song_ids):
+        tracks = None
+        try:
+            tracks = self._mobileclient.add_songs_to_playlist(playlist_id, song_ids)
+        except NotLoggedIn:
+            if self.authenticate():
+                tracks = self._mobileclient.add_songs_to_playlist(playlist_id, song_ids)
+            else:
+                return None
+
+        return tracks
+
     def get_stream_url(self, id):
         try:
             stream_url = self._mobileclient.get_stream_url(id, self._device)

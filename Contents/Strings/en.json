@@ -11,5 +11,14 @@
     "Search": "Search",
     "Search Prompt": "Search for an album, artist or song...",
     "Loading": "The library is still being loaded. Please try again in a moment.",
-    "Please Wait": "Please Wait"
+    "Please Wait": "Please Wait",
+    "Song": "Song",
+    "Artist": "Artist",
+    "Album": "Album",
+    "Playlist": "Playlist",
+    "Options for": "Options for",
+    "Add to": "Add to",
+    "Adding Song": "Adding Song",
+    "Adding Fail": "There was a problem adding the song",
+    "Adding Success": "Successfully added song"
 }

@@ -6,8 +6,8 @@ ICON           = 'icon-default.png'
 SEARCH_ICON    = 'icon-search.png'
 PREFS_ICON     = 'icon-prefs.png'
 PREFIX         = '/music/googlemusic'
-API            = GMusic()
 PAGE_SIZE      = 50
+API            = None
 
 ################################################################################
 def Prettify(str):
@@ -29,6 +29,9 @@ def ValidatePrefs():
 ################################################################################
 @handler(PREFIX, L('Title'), art=ART, thumb=ICON)
 def MainMenu():
+    global API
+    API = GMusic()
+
     oc = ObjectContainer(title2=L('Title'))
 
     if API.authenticated == False and Prefs['email'] and Prefs['password']:
@@ -66,15 +69,20 @@ def LibraryMenu():
 
 ################################################################################
 @route(PREFIX + '/playlistsmenu')
-def PlaylistsMenu():
+def PlaylistsMenu(id=None):
     oc = ObjectContainer(title2=L('Playlists'))
 
     playlists = API.get_all_playlists()
     for playlist in playlists:
-        if 'type' in playlist and playlist['type'].lower() == 'user_generated':
-            oc.add(DirectoryObject(key=Callback(GetPlaylistContents, name=playlist['name'], id=playlist['id']), title=playlist['name']))
+        # This block is for normal selection of playlists
+        if id == None:
+            if 'type' in playlist and playlist['type'].lower() == 'user_generated':
+                oc.add(DirectoryObject(key=Callback(GetPlaylistContents, name=playlist['name'], id=playlist['id']), title=playlist['name']))
+            else:
+                oc.add(DirectoryObject(key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']), title=playlist['name']))
+        # This block is for when a song is being added to a playlist
         else:
-            oc.add(DirectoryObject(key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']), title=playlist['name']))
+            oc.add(DirectoryObject(key=Callback(AddToCollection, id=id, playlist=playlist['id'], type=1), title=playlist['name']))
 
     oc.objects.sort(key=lambda obj: obj.title)
     return oc
@@ -100,7 +108,7 @@ def GenresMenu():
     oc = ObjectContainer(title2=L('Genres'))
 
     genres = API.get_genres()
-    for genre in genres['genres']:
+    for genre in genres:
         if 'children' in genre:
             children = genre['children']
         else:
@@ -117,18 +125,28 @@ def GenresMenu():
 def SearchMenu(query):
     oc = ObjectContainer(title2=L('Search'))
 
-    results = API.search_all_access(query)
+    results = API.search_all_access(query, 100)
     for key, values in results.iteritems():
         if key == 'song_hits':
             for song in values:
-                oc.add(GetTrack(song['track'], song['track']['nid']))
+                do = DirectoryObject(
+                    key=Callback(AddItemMenu, song=song['track']),
+                    title=song['track']['title'],
+                    summary=L('Song')
+                )
+
+                if 'albumArtRef' in song['track']:
+                    do.thumb = song['track']['albumArtRef'][0]['url']
+
+                oc.add(do)
 
         if key == 'artist_hits':
             for artist in values:
                 artist = artist['artist']
                 artistObj = DirectoryObject(
                     key=Callback(GetArtistInfo, name=artist['name'], id=artist['artistId']),
-                    title=artist['name']
+                    title=artist['name'],
+                    summary=L('Artist')
                 )
                 if 'artistArtRef' in artist:
                     artistObj.thumb = artist['artistArtRef']
@@ -140,7 +158,8 @@ def SearchMenu(query):
                 album = album['album']
                 albumObj = DirectoryObject(
                     key=Callback(GetAlbumInfo, name=album['name'], id=album['albumId']),
-                    title=album['name']
+                    title=album['name'],
+                    summary=L('Album')
                 )
 
                 if 'albumArtRef' in album:
@@ -148,7 +167,46 @@ def SearchMenu(query):
 
                 oc.add(albumObj)
 
+        if key == 'playlist_hits':
+            for playlist in values:
+               playlist = playlist['playlist']
+               playlistObj = DirectoryObject(
+                   key=Callback(GetSharedPlaylist, name=playlist['name'], token=playlist['shareToken']),
+                   title=playlist['name'],
+                   summary=L('Playlist')
+               )
+
+               if 'albumArtRef' in playlist:
+                   playlistObj.thumb = playlist['albumArtRef'][0]['url']
+
+               oc.add(playlistObj)
+
     return oc
+
+################################################################################
+@route(PREFIX + '/additemmenu', song=dict)
+def AddItemMenu(song):
+    oc = ObjectContainer(title2='%s %s' % (L('Options for'), song['title']))
+    oc.add(GetTrack(song, song['nid']))
+    oc.add(DirectoryObject(key=Callback(AddToCollection, id=song['nid']), title='%s %s' % (L('Add to'), L('My Library'))))
+    oc.add(DirectoryObject(key=Callback(PlaylistsMenu, id=song['nid']), title='%s %s' % (L('Add to'), L('Playlist'))))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/addtocollection', type=int)
+def AddToCollection(id, playlist=None, type=0):
+    if type == 0:
+        item = API.add_aa_track(id)
+    else:
+        item = API.add_songs_to_playlist(playlist, id)
+
+    if item == None:
+        message = L('Adding Fail')
+    else:
+        message = L('Adding Success')
+
+    return ObjectContainer(header=L('Adding Song'), message=message)
 
 ################################################################################
 @route(PREFIX + '/librarysubmenu', page=int)
