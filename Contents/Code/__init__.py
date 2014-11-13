@@ -30,7 +30,8 @@ def ValidatePrefs():
 @handler(PREFIX, L('Title'), art=ART, thumb=ICON)
 def MainMenu():
     global API
-    API = GMusic()
+    if API == None:
+        API = GMusic()
 
     oc = ObjectContainer(title2=L('Title'))
 
