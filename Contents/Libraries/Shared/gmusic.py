@@ -8,9 +8,11 @@ class GMusic(object):
         self.all_access = False
         self.library_loaded = False
         self.all_songs = []
+        self.letters = {}
         self.artists = {}
         self.albums = {}
         self.genres = {}
+        self.tracks_by_letter = {}
         self.tracks_by_artist = {}
         self.tracks_by_album = {}
         self.tracks_by_genre = {}
@@ -48,6 +50,50 @@ class GMusic(object):
 
         else:
             return self.all_songs
+
+    def _set_songs_by_letter(self):
+        if not self.tracks_by_letter:
+            songs = self._set_all_songs()
+            for song in songs:
+                if 'title' in song:
+                    thumb = None
+                    letter = song['title'][0]
+                    if letter not in self.tracks_by_letter:
+                        self.tracks_by_letter[letter] = []
+                        self.letters[letter] = None
+
+                    track = {}
+
+                    if 'title' in song:
+                        track['title'] = song['title']
+
+                    if 'album' in song:
+                        track['album'] = song['album']
+
+                    if 'artist' in song:
+                        track['artist'] = song['artist']
+
+                    if 'durationMillis' in song:
+                        track['durationMillis'] = song['durationMillis']
+
+                    if 'id' in song:
+                        track['id'] = song['id']
+
+                    if 'trackNumber' in song:
+                        track['trackType'] = song['trackNumber']
+
+                    if 'albumArtRef' in song:
+                        track['albumArtRef'] = song['albumArtRef']
+                        thumb = song['albumArtRef'][0]['url']
+                        self.letters[letter] = thumb
+
+                    if 'storeId' in song:
+                        track['storeId'] = song['storeId']
+
+                    self.tracks_by_letter[letter].append({'track': track, 'thumb': thumb, 'id': song['id']})
+
+            return self.tracks_by_genre
+
 
     def _set_all_artists(self, name=None):
         if not self.tracks_by_artist:
@@ -196,6 +242,7 @@ class GMusic(object):
 
     def load_data(self):
         self._set_all_songs()
+        self._set_songs_by_letter()
         self._set_all_artists()
         self._set_all_albums()
         self._set_all_genres()
@@ -209,6 +256,8 @@ class GMusic(object):
             return self.tracks_by_album[name]
         elif type == 'genres':
             return self.tracks_by_genre[name]
+        elif type == 'songs by letter':
+            return self.tracks_by_letter[name]
         else:
             return {}
 

@@ -1,4 +1,5 @@
 import random
+import string
 from gmusic import GMusic, CallFailure
 
 ART            = 'art-default.jpg'
@@ -30,8 +31,7 @@ def ValidatePrefs():
 @handler(PREFIX, L('Title'), art=ART, thumb=ICON)
 def MainMenu():
     global API
-    if API == None:
-        API = GMusic()
+    API = GMusic()
 
     oc = ObjectContainer(title2=L('Title'))
 
@@ -64,6 +64,7 @@ def LibraryMenu():
     oc.add(DirectoryObject(key=Callback(LibrarySubMenu, title='Albums'), title=L('Albums')))
     oc.add(DirectoryObject(key=Callback(ShowSongs, title='Songs'), title=L('Songs')))
     oc.add(DirectoryObject(key=Callback(LibrarySubMenu, title='Genres'), title=L('Genres')))
+    oc.add(DirectoryObject(key=Callback(LibrarySubMenu, title='Songs By Letter'), title=L('Songs By Letter')))
     oc.add(DirectoryObject(key=Callback(ShowSongs, title='Shuffle All', shuffle=True), title=L('Shuffle All')))
 
     return oc
@@ -222,6 +223,8 @@ def LibrarySubMenu(title, page=1):
             items = API.albums
         elif title == 'Genres':
             items = API.genres
+        elif title == 'Songs By Letter':
+            items = API.letters
 
         start = (page - 1) * PAGE_SIZE
         end = start + PAGE_SIZE
@@ -270,9 +273,9 @@ def ShowSongs(title, shuffle=False, page=1):
 @route(PREFIX + '/gettracklist')
 def GetTrackList(name, type):
     oc = ObjectContainer(title2=name)
-
     tracks = API.get_tracks_for_type(type, name)
-    for track in sorted(tracks, key = lambda x: x['track'].get('trackType')):
+    sort = 'title' if type == 'Songs By Letter' else 'trackType'
+    for track in sorted(tracks, key = lambda x: x['track'].get(sort)):
         oc.add(GetTrack(track['track'], track['id']))
 
     return oc
@@ -283,7 +286,6 @@ def GetPlaylistContents(name, id):
     oc = ObjectContainer(title2=name)
 
     tracks = API.get_all_user_playlist_contents(id)
-
     for track in tracks:
         if 'track' in track:
             data = track['track']
