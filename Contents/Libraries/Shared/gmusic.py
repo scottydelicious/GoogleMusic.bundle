@@ -51,179 +51,6 @@ class GMusic(object):
         else:
             return self.all_songs
 
-    def _set_songs_by_letter(self):
-        if not self.tracks_by_letter:
-            songs = self._set_all_songs()
-            for song in songs:
-                if 'title' in song:
-                    thumb = None
-                    letter = song['title'][0]
-                    if letter not in self.tracks_by_letter:
-                        self.tracks_by_letter[letter] = []
-                        self.letters[letter] = None
-
-                    track = {}
-
-                    if 'title' in song:
-                        track['title'] = song['title']
-
-                    if 'album' in song:
-                        track['album'] = song['album']
-
-                    if 'artist' in song:
-                        track['artist'] = song['artist']
-
-                    if 'durationMillis' in song:
-                        track['durationMillis'] = song['durationMillis']
-
-                    if 'id' in song:
-                        track['id'] = song['id']
-
-                    if 'trackNumber' in song:
-                        track['trackType'] = song['trackNumber']
-
-                    if 'albumArtRef' in song:
-                        track['albumArtRef'] = song['albumArtRef']
-                        thumb = song['albumArtRef'][0]['url']
-                        self.letters[letter] = thumb
-
-                    if 'storeId' in song:
-                        track['storeId'] = song['storeId']
-
-                    self.tracks_by_letter[letter].append({'track': track, 'thumb': thumb, 'id': song['id']})
-
-            return self.tracks_by_genre
-
-
-    def _set_all_artists(self, name=None):
-        if not self.tracks_by_artist:
-            songs = self._set_all_songs()
-            for song in songs:
-                artist = song['artist']
-                thumb = None
-                if artist not in self.tracks_by_artist:
-                    self.tracks_by_artist[artist] = []
-                    self.artists[artist] = None
-
-                track = {'artist': artist}
-
-                if 'title' in song:
-                    track['title'] = song['title']
-
-                if 'album' in song:
-                    track['album'] = song['album']
-
-                if 'durationMillis' in song:
-                    track['durationMillis'] = song['durationMillis']
-
-                if 'id' in song:
-                    track['id'] = song['id']
-
-                if 'trackNumber' in song:
-                    track['trackType'] = song['trackNumber']
-
-                if 'albumArtRef' in song:
-                    track['albumArtRef'] = song['albumArtRef']
-
-                if 'artistArtRef' in song:
-                    thumb = song['artistArtRef'][0]['url']
-                    self.artists[artist] = thumb
-
-                if 'storeId' in song:
-                    track['storeId'] = song['storeId']
-
-                self.tracks_by_artist[artist].append({'track': track, 'thumb': thumb, 'id': song['id']})
-
-        if name:
-            return self.tracks_by_artist[name]
-
-        return self.tracks_by_artist
-
-    def _set_all_albums(self):
-        if not self.tracks_by_album:
-            songs = self._set_all_songs()
-            for song in songs:
-                album = song['album']
-                thumb = None
-                if album not in self.tracks_by_album:
-                    self.tracks_by_album[album] = []
-                    self.albums[album] = None
-
-                track = {'album': album}
-
-                if 'title' in song:
-                    track['title'] = song['title']
-
-                if 'artist' in song:
-                    track['artist'] = song['artist']
-
-                if 'durationMillis' in song:
-                    track['durationMillis'] = song['durationMillis']
-
-                if 'id' in song:
-                    track['id'] = song['id']
-
-                if 'trackNumber' in song:
-                    track['trackType'] = song['trackNumber']
-
-                if 'albumArtRef' in song:
-                    track['albumArtRef'] = song['albumArtRef']
-                    thumb = song['albumArtRef'][0]['url']
-                    self.albums[album] = thumb
-
-                if 'storeId' in song:
-                    track['storeId'] = song['storeId']
-
-                self.tracks_by_album[album].append({'track': track, 'thumb': thumb, 'id': song['id']})
-
-        return self.tracks_by_album
-
-    def _set_all_genres(self):
-        if not self.tracks_by_genre:
-            songs = self._set_all_songs()
-            for song in songs:
-                if 'genre' in song:
-                    genre = song['genre']
-                else:
-                    genre = '(None)'
-
-                thumb = None
-                if genre not in self.tracks_by_genre:
-                    self.tracks_by_genre[genre] = []
-                    self.genres[genre] = None
-
-                track = {}
-
-                if 'title' in song:
-                    track['title'] = song['title']
-
-                if 'album' in song:
-                    track['album'] = song['album']
-
-                if 'artist' in song:
-                    track['artist'] = song['artist']
-
-                if 'durationMillis' in song:
-                    track['durationMillis'] = song['durationMillis']
-
-                if 'id' in song:
-                    track['id'] = song['id']
-
-                if 'trackNumber' in song:
-                    track['trackType'] = song['trackNumber']
-
-                if 'albumArtRef' in song:
-                    track['albumArtRef'] = song['albumArtRef']
-                    thumb = song['albumArtRef'][0]['url']
-                    self.genres[genre] = thumb
-
-                if 'storeId' in song:
-                    track['storeId'] = song['storeId']
-
-                self.tracks_by_genre[genre].append({'track': track, 'thumb': thumb, 'id': song['id']})
-
-        return self.tracks_by_genre
-
     def authenticate(self, email, password):
         try:
             mcauthenticated = self._mobileclient.login(email, password)
@@ -242,10 +69,65 @@ class GMusic(object):
 
     def load_data(self):
         self._set_all_songs()
-        self._set_songs_by_letter()
-        self._set_all_artists()
-        self._set_all_albums()
-        self._set_all_genres()
+        for song in self.all_songs:
+            thumb = None
+            letter = song['title'][0]
+            artist = song['artist']
+            album = song['album']
+            genre = song['genre'] if 'genre' in song else '(None)'
+
+            if letter not in self.tracks_by_letter:
+                self.tracks_by_letter[letter] = []
+                self.letters[letter] = None
+
+            if artist not in self.tracks_by_artist:
+                self.tracks_by_artist[artist] = []
+                self.artists[artist] = None
+
+            if album not in self.tracks_by_album:
+                self.tracks_by_album[album] = []
+                self.albums[album] = None
+
+            if genre not in self.tracks_by_genre:
+                self.tracks_by_genre[genre] = []
+                self.genres[genre] = None
+
+            track = {'artist': artist, 'album': album}
+
+            if 'title' in song:
+                track['title'] = song['title']
+
+            if 'album' in song:
+                track['album'] = song['album']
+
+            if 'artist' in song:
+                track['artist'] = song['artist']
+
+            if 'durationMillis' in song:
+                track['durationMillis'] = song['durationMillis']
+
+            if 'id' in song:
+                track['id'] = song['id']
+
+            if 'trackNumber' in song:
+                track['trackType'] = song['trackNumber']
+
+            if 'storeId' in song:
+                track['storeId'] = song['storeId']
+
+            if 'albumArtRef' in song:
+                track['albumArtRef'] = song['albumArtRef']
+                thumb = song['albumArtRef'][0]['url']
+                self.letters[letter] = thumb
+                self.artists[artist] = thumb
+                self.albums[album] = thumb
+                self.genres[genre] = thumb
+
+            self.tracks_by_letter[letter].append({'track': track, 'thumb': thumb, 'id': song['id']})
+            self.tracks_by_artist[artist].append({'track': track, 'thumb': thumb, 'id': song['id']})
+            self.tracks_by_album[album].append({'track': track, 'thumb': thumb, 'id': song['id']})
+            self.tracks_by_genre[genre].append({'track': track, 'thumb': thumb, 'id': song['id']})
+
         self.library_loaded = True
 
     def get_tracks_for_type(self, type, name):
