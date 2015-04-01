@@ -1,6 +1,7 @@
 import random
 import string
-from gmusic import GMusic, CallFailure
+import datetime
+from gmusic import GMusic, CallFailure, API
 
 ART            = 'art-default.jpg'
 ICON           = 'icon-default.png'
@@ -8,7 +9,7 @@ SEARCH_ICON    = 'icon-search.png'
 PREFS_ICON     = 'icon-prefs.png'
 PREFIX         = '/music/googlemusic'
 PAGE_SIZE      = 50
-API            = None
+TWO_HOURS      = datetime.timedelta(seconds=7200)
 
 ################################################################################
 def Prettify(str):
@@ -17,11 +18,18 @@ def Prettify(str):
 def LoadAsync():
     API.load_data()
 
+def LibraryRefresh():
+    HTTP.ClearCache()
+    Dict['refresh'] = datetime.datetime.now()
+    API.reset_library()
+    Thread.Create(LoadAsync)
+
 ################################################################################
 def Start():
     ObjectContainer.art = R(ART)
     ObjectContainer.title1 = L('Title')
     DirectoryObject.thumb = R(ICON)
+    Dict['refresh'] = datetime.datetime.now()
 
 ################################################################################
 def ValidatePrefs():
@@ -30,9 +38,8 @@ def ValidatePrefs():
 ################################################################################
 @handler(PREFIX, L('Title'), art=ART, thumb=ICON)
 def MainMenu():
-    global API
-    if API == None:
-        API = GMusic()
+    if datetime.datetime.now() > Dict['refresh'] + TWO_HOURS:
+        LibraryRefresh()
 
     oc = ObjectContainer(title2=L('Title'))
 
@@ -49,6 +56,7 @@ def MainMenu():
             oc.add(DirectoryObject(key=Callback(GenresMenu), title=L('Genres')))
             oc.add(InputDirectoryObject(key=Callback(SearchMenu), title=L('Search'), prompt=L('Search Prompt'), thumb=R(SEARCH_ICON)))
 
+    oc.add(DirectoryObject(key=Callback(RefreshMenu), title=L('Refresh')))
     oc.add(PrefsObject(title=L('Prefs Title'), thumb=R(PREFS_ICON)))
     return oc
 
@@ -97,7 +105,7 @@ def StationsMenu():
     oc.add(DirectoryObject(key=Callback(GetStationTracks, name=L('Lucky Radio'), id='IFL'), title=L('Lucky Radio')))
 
     stations = API.get_all_stations()
-    for station in stations:
+    for station in sorted(stations, key = lambda x: int(x.get('recentTimestamp')), reverse=True):
         do = DirectoryObject(key=Callback(GetStationTracks, name=station['name'], id=station['id']), title=station['name'])
         if 'imageUrl' in station:
             do.thumb = station['imageUrl']
@@ -187,6 +195,12 @@ def SearchMenu(query):
     return oc
 
 ################################################################################
+@route(PREFIX + '/refreshmenu')
+def RefreshMenu():
+    LibraryRefresh()
+    return ObjectContainer(header=L('Refresh'), message=L('RefreshInProgress'))
+
+################################################################################
 @route(PREFIX + '/additemmenu', song=dict)
 def AddItemMenu(song):
     oc = ObjectContainer(title2='%s %s' % (L('Options for'), song['title']))
@@ -209,6 +223,7 @@ def AddToCollection(id, playlist=None, type=0):
     else:
         message = L('Adding Success')
 
+    LibraryRefresh()
     return ObjectContainer(header=L('Adding Song'), message=message)
 
 ################################################################################
@@ -267,6 +282,25 @@ def ShowSongs(title, shuffle=False, page=1):
 
     else:
         return ObjectContainer(header=L('Please Wait'), message=L('Loading'))
+
+    return oc
+
+################################################################################
+@route(PREFIX + '/getalbumsinlibrary')
+def GetAlbumsInLibrary(name):
+    oc = ObjectContainer(title2=name)
+
+    albums = API.get_albums_in_library(name)
+    for album in sorted(albums['albums'], key = lambda x: x.get('year')):
+        albumObj = DirectoryObject(
+            key=Callback(GetAlbumInfo, name=album['name'], id=album['albumId']),
+            title=album['name']
+        )
+
+        if 'albumArtRef' in album:
+            albumObj.thumb = album['albumArtRef']
+
+        oc.add(albumObj)
 
     return oc
 
@@ -346,7 +380,7 @@ def CreateStation(id):
 
 ################################################################################
 @route(PREFIX + '/getartistinfo')
-def GetArtistInfo(name, id):
+def GetArtistInfo(name, id, inLibrary=False):
     oc = ObjectContainer(title2=name)
 
     artist = API.get_artist_info(id)

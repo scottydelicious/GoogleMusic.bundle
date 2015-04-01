@@ -308,3 +308,20 @@ class GMusic(object):
             raise CallFailure('Could not play song with id: ' + id, 'get_stream_url')
 
         return stream_url
+
+    def reset_library(self):
+        self.library_loaded = False
+        self.all_songs[:] = []
+        self._playlists[:] = []
+        self._playlist_contents[:] = []
+        self._stations[:] = []
+        self.letters.clear()
+        self.artists.clear()
+        self.albums.clear()
+        self.genres.clear()
+        self.tracks_by_letter.clear()
+        self.tracks_by_artist.clear()
+        self.tracks_by_album.clear()
+        self.tracks_by_genre.clear()
+
+API = GMusic()
