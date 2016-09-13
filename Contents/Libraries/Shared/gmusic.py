@@ -17,7 +17,7 @@ class GMusic(object):
         self.tracks_by_album = {}
         self.tracks_by_genre = {}
         self._device = None
-        self._webclient = Webclient(debug_logging=False)
+        #self._webclient = Webclient(debug_logging=True)
         self._mobileclient = Mobileclient(debug_logging=False)
         self._playlists = []
         self._playlist_contents = []
@@ -25,7 +25,7 @@ class GMusic(object):
 
     def _get_device_id(self):
         if self.authenticated:
-            devices = self._webclient.get_registered_devices()
+            devices = self._mobileclient.get_registered_devices()
             for dev in devices:
                 if dev['type'] == 'PHONE':
                     self._device = dev['id'][2:]
@@ -35,8 +35,8 @@ class GMusic(object):
                     break
 
     def _set_all_access(self):
-        settings = self._webclient._make_call(webclient.GetSettings, '')
-        self.all_access = True if 'isSubscription' in settings['settings'] and settings['settings']['isSubscription'] == True else False
+        #settings = self._webclient._make_call(webclient.GetSettings, '')
+        self.all_access = True #if 'isSubscription' in settings['settings'] and settings['settings']['isSubscription'] == True else False
 
     def _set_all_songs(self):
         if len(self.all_songs) == 0:
@@ -53,16 +53,16 @@ class GMusic(object):
 
     def authenticate(self, email, password):
         try:
-            mcauthenticated = self._mobileclient.login(email, password)
+            mcauthenticated = self._mobileclient.login(email, password, Mobileclient.FROM_MAC_ADDRESS)
         except AlreadyLoggedIn:
             mcauthenticated = True
 
-        try:
-            wcauthenticated = self._webclient.login(email, password)
-        except AlreadyLoggedIn:
-            wcauthenticated = True
+        #try:
+        #    wcauthenticated = self._webclient.login(email, password)
+        #except AlreadyLoggedIn:
+        #    wcauthenticated = True
 
-        self.authenticated = mcauthenticated and wcauthenticated
+        self.authenticated = mcauthenticated #and wcauthenticated
         self._set_all_access()
         self._get_device_id()
         return self.authenticated
