@@ -3,18 +3,21 @@
 """
 Sessions handle the details of authentication and transporting requests.
 """
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+from builtins import *  # noqa
 from contextlib import closing
-import cookielib
 
 import gpsoauth
-import oauth2client
 import httplib2  # included with oauth2client
+import mechanicalsoup
+import oauth2client
 import requests
 
 from gmusicapi.exceptions import (
     AlreadyLoggedIn, NotLoggedIn, CallFailure
 )
-from gmusicapi.protocol.shared import ClientLogin
 from gmusicapi.protocol import webclient
 from gmusicapi.utils import utils
 
@@ -90,31 +93,62 @@ class _Base(object):
 
 
 class Webclient(_Base):
-    def __init__(self, *args, **kwargs):
-        super(Webclient, self).__init__(*args, **kwargs)
-        self._authtoken = None
-
     def login(self, email, password, *args, **kwargs):
         """
-        Perform clientlogin then retrieve webclient cookies.
+        Perform serviceloginauth then retrieve webclient cookies.
 
         :param email:
         :param password:
         """
-
         super(Webclient, self).login()
 
-        try:
-            res = ClientLogin.perform(self, True, email, password)
-        except CallFailure:
-            self.logout()
-            return self.is_authenticated
+        # Google's login form has a bunch of hidden fields I'd rather not deal with manually.
+        browser = mechanicalsoup.Browser(soup_config={"features": "html.parser"})
 
-        if 'SID' not in res or 'Auth' not in res:
+        login_page = browser.get('https://accounts.google.com/ServiceLoginAuth',
+                                 params={'service': 'sj',
+                                         'continue': 'https://play.google.com/music/listen'})
+        form_candidates = login_page.soup.select("form")
+        if len(form_candidates) > 1:
+            log.error("Google login form dom has changed; there are %s candidate forms:\n%s",
+                      len(form_candidates), form_candidates)
             return False
 
-        self._authtoken = res['Auth']
+        form = form_candidates[0]
+        form.select("#Email")[0]['value'] = email
 
+        response = browser.submit(form, 'https://accounts.google.com/AccountLoginInfo')
+
+        try:
+            response.raise_for_status()
+        except requests.HTTPError:
+            log.exception("submitting login form failed")
+            return False
+
+        form_candidates = response.soup.select("form")
+        if len(form_candidates) > 1:
+            log.error("Google login form dom has changed; there are %s candidate forms:\n%s",
+                      len(form_candidates), form_candidates)
+            return False
+
+        form = form_candidates[0]
+        form.select("#Passwd")[0]['value'] = password
+
+        response = browser.submit(form, 'https://accounts.google.com/ServiceLoginAuth')
+
+        try:
+            response.raise_for_status()
+        except requests.HTTPError:
+            log.exception("submitting login form failed")
+            return False
+
+        # We can't use in without .keys(), since international users will see a
+        # CookieConflictError.
+        if 'SID' not in list(browser.session.cookies.keys()):
+            # Invalid auth.
+            return False
+
+        self._rsession.cookies.update(browser.session.cookies)
         self.is_authenticated = True
 
         # Get webclient cookies.
@@ -122,19 +156,12 @@ class Webclient(_Base):
         try:
             webclient.Init.perform(self, True)
         except CallFailure:
-            # throw away clientlogin credentials
+            log.exception("unable to initialize webclient cookies")
             self.logout()
 
         return self.is_authenticated
 
     def _send_with_auth(self, req_kwargs, desired_auth, rsession):
-        if desired_auth.sso:
-            req_kwargs.setdefault('headers', {})
-
-            # does this ever expire? would we have to perform clientlogin again?
-            req_kwargs['headers']['Authorization'] = \
-                'GoogleLogin auth=' + self._authtoken
-
         if desired_auth.xt:
             req_kwargs.setdefault('params', {})
 
@@ -148,6 +175,8 @@ class Mobileclient(_Base):
         super(Mobileclient, self).__init__(*args, **kwargs)
         self._master_token = None
         self._authtoken = None
+        self._locale = None
+        self._is_subscribed = None
 
     def login(self, email, password, android_id, *args, **kwargs):
         """
@@ -179,6 +208,24 @@ class Mobileclient(_Base):
 
     def _send_with_auth(self, req_kwargs, desired_auth, rsession):
         if desired_auth.oauth:
+            # Default to English (United States) if no locale given.
+            if not self._locale:
+                self._locale = 'en_US'
+
+            # Set locale for all Mobileclient calls.
+            req_kwargs.setdefault('params', {})
+            req_kwargs['params'].update({'hl': self._locale})
+
+            # As of API v2.5, dv is a required parameter for all calls.
+            # The dv value is part of the Android app version number,
+            # but setting this to 0 works fine.
+            req_kwargs['params'].update({'dv': 0})
+
+            if self._is_subscribed:
+                req_kwargs['params'].update({'tier': 'aa'})
+            else:
+                req_kwargs['params'].update({'tier': 'fr'})
+
             req_kwargs.setdefault('headers', {})
 
             # does this expire?

@@ -9,19 +9,16 @@
 
 """AIFF audio stream information and tags."""
 
-# NOTE from Ben Ockmore - according to the Py3k migration guidelines, AIFF
-# chunk keys should be unicode in Py3k, and unicode or bytes in Py2k (ASCII).
-# To make this easier, chunk keys should be stored internally as unicode.
-
+import sys
 import struct
 from struct import pack
 
-from ._compat import endswith, text_type, PY3
+from ._compat import endswith, text_type, reraise
 from mutagen import StreamInfo, FileType
 
 from mutagen.id3 import ID3
 from mutagen.id3._util import ID3NoHeaderError, error as ID3Error
-from mutagen._util import insert_bytes, delete_bytes, MutagenError
+from mutagen._util import resize_bytes, delete_bytes, MutagenError
 
 __all__ = ["AIFF", "Open", "delete"]
 
@@ -39,14 +36,7 @@ _HUGE_VAL = 1.79769313486231e+308
 
 
 def is_valid_chunk_id(id):
-    if not isinstance(id, text_type):
-        if PY3:
-            raise TypeError("AIFF chunk must be unicode")
-
-        try:
-            id = id.decode('ascii')
-        except UnicodeDecodeError:
-            return False
+    assert isinstance(id, text_type)
 
     return ((len(id) <= 4) and (min(id) >= u' ') and
             (max(id) <= u'~'))
@@ -85,36 +75,58 @@ class IFFChunk(object):
 
         self.id, self.data_size = struct.unpack('>4si', header)
 
-        if not isinstance(self.id, text_type):
+        try:
             self.id = self.id.decode('ascii')
+        except UnicodeDecodeError:
+            raise InvalidChunk()
 
         if not is_valid_chunk_id(self.id):
             raise InvalidChunk()
 
         self.size = self.HEADER_SIZE + self.data_size
         self.data_offset = fileobj.tell()
-        self.data = None
 
     def read(self):
         """Read the chunks data"""
+
         self.__fileobj.seek(self.data_offset)
-        self.data = self.__fileobj.read(self.data_size)
+        return self.__fileobj.read(self.data_size)
+
+    def write(self, data):
+        """Write the chunk data"""
+
+        if len(data) > self.data_size:
+            raise ValueError
+
+        self.__fileobj.seek(self.data_offset)
+        self.__fileobj.write(data)
 
     def delete(self):
         """Removes the chunk from the file"""
+
         delete_bytes(self.__fileobj, self.size, self.offset)
         if self.parent_chunk is not None:
-            self.parent_chunk.resize(self.parent_chunk.data_size - self.size)
+            self.parent_chunk._update_size(
+                self.parent_chunk.data_size - self.size)
 
-    def resize(self, data_size):
+    def _update_size(self, data_size):
         """Update the size of the chunk"""
+
         self.__fileobj.seek(self.offset + 4)
         self.__fileobj.write(pack('>I', data_size))
         if self.parent_chunk is not None:
             size_diff = self.data_size - data_size
-            self.parent_chunk.resize(self.parent_chunk.data_size - size_diff)
+            self.parent_chunk._update_size(
+                self.parent_chunk.data_size - size_diff)
         self.data_size = data_size
         self.size = data_size + self.HEADER_SIZE
+
+    def resize(self, new_data_size):
+        """Resize the file and update the chunk sizes"""
+
+        resize_bytes(
+            self.__fileobj, self.data_size, new_data_size, self.data_offset)
+        self._update_size(new_data_size)
 
 
 class IFFFile(object):
@@ -154,8 +166,7 @@ class IFFFile(object):
     def __contains__(self, id_):
         """Check if the IFF file contains a specific chunk"""
 
-        if not isinstance(id_, text_type):
-            id_ = id_.decode('ascii')
+        assert isinstance(id_, text_type)
 
         if not is_valid_chunk_id(id_):
             raise KeyError("AIFF key must be four ASCII characters.")
@@ -165,8 +176,7 @@ class IFFFile(object):
     def __getitem__(self, id_):
         """Get a chunk from the IFF file"""
 
-        if not isinstance(id_, text_type):
-            id_ = id_.decode('ascii')
+        assert isinstance(id_, text_type)
 
         if not is_valid_chunk_id(id_):
             raise KeyError("AIFF key must be four ASCII characters.")
@@ -180,8 +190,7 @@ class IFFFile(object):
     def __delitem__(self, id_):
         """Remove a chunk from the IFF file"""
 
-        if not isinstance(id_, text_type):
-            id_ = id_.decode('ascii')
+        assert isinstance(id_, text_type)
 
         if not is_valid_chunk_id(id_):
             raise KeyError("AIFF key must be four ASCII characters.")
@@ -191,8 +200,7 @@ class IFFFile(object):
     def insert_chunk(self, id_):
         """Insert a new chunk at the end of the IFF file"""
 
-        if not isinstance(id_, text_type):
-            id_ = id_.decode('ascii')
+        assert isinstance(id_, text_type)
 
         if not is_valid_chunk_id(id_):
             raise KeyError("AIFF key must be four ASCII characters.")
@@ -201,7 +209,7 @@ class IFFFile(object):
         self.__fileobj.write(pack('>4si', id_.ljust(4).encode('ascii'), 0))
         self.__fileobj.seek(self.__next_offset)
         chunk = IFFChunk(self.__fileobj, self[u'FORM'])
-        self[u'FORM'].resize(self[u'FORM'].data_size + chunk.size)
+        self[u'FORM']._update_size(self[u'FORM'].data_size + chunk.size)
 
         self.__chunks[id_] = chunk
         self.__next_offset = chunk.offset + chunk.size
@@ -233,9 +241,9 @@ class AIFFInfo(StreamInfo):
         except KeyError as e:
             raise error(str(e))
 
-        common_chunk.read()
+        data = common_chunk.read()
 
-        info = struct.unpack('>hLh10s', common_chunk.data[:18])
+        info = struct.unpack('>hLh10s', data[:18])
         channels, frame_count, sample_size, sample_rate = info
 
         self.sample_rate = int(read_float(sample_rate))
@@ -245,7 +253,7 @@ class AIFFInfo(StreamInfo):
         self.length = frame_count / float(self.sample_rate)
 
     def pprint(self):
-        return "%d channel AIFF @ %d bps, %s Hz, %.2f seconds" % (
+        return u"%d channel AIFF @ %d bps, %s Hz, %.2f seconds" % (
             self.channels, self.bitrate, self.sample_rate, self.length)
 
 
@@ -258,47 +266,36 @@ class _IFFID3(ID3):
         except (InvalidChunk, KeyError):
             raise ID3NoHeaderError("No ID3 chunk")
 
-    def save(self, filename=None, v2_version=4, v23_sep='/'):
+    def save(self, filename=None, v2_version=4, v23_sep='/', padding=None):
         """Save ID3v2 data to the AIFF file"""
-
-        framedata = self._prepare_framedata(v2_version, v23_sep)
-        framesize = len(framedata)
 
         if filename is None:
             filename = self.filename
 
         # Unlike the parent ID3.save method, we won't save to a blank file
         # since we would have to construct a empty AIFF file
-        fileobj = open(filename, 'rb+')
-        iff_file = IFFFile(fileobj)
+        with open(filename, 'rb+') as fileobj:
+            iff_file = IFFFile(fileobj)
 
-        try:
             if u'ID3' not in iff_file:
                 iff_file.insert_chunk(u'ID3')
 
             chunk = iff_file[u'ID3']
-            fileobj.seek(chunk.data_offset)
 
-            header = fileobj.read(10)
-            header = self._prepare_id3_header(header, framesize, v2_version)
-            header, new_size, _ = header
+            try:
+                data = self._prepare_data(
+                    fileobj, chunk.data_offset, chunk.data_size, v2_version,
+                    v23_sep, padding)
+            except ID3Error as e:
+                reraise(error, e, sys.exc_info()[2])
 
-            data = header + framedata + (b'\x00' * (new_size - framesize))
-
-            # Include ID3 header size in 'new_size' calculation
-            new_size += 10
-
-            # Expand the chunk if necessary, including pad byte
-            if new_size > chunk.size:
-                insert_at = chunk.offset + chunk.size
-                insert_size = new_size - chunk.size + new_size % 2
-                insert_bytes(fileobj, insert_size, insert_at)
-                chunk.resize(new_size)
-
-            fileobj.seek(chunk.data_offset)
-            fileobj.write(data)
-        finally:
-            fileobj.close()
+            new_size = len(data)
+            new_size += new_size % 2  # pad byte
+            assert new_size % 2 == 0
+            chunk.resize(new_size)
+            data += (new_size - len(data)) * b'\x00'
+            assert new_size == len(data)
+            chunk.write(data)
 
     def delete(self, filename=None):
         """Completely removes the ID3 chunk from the AIFF file"""
@@ -353,11 +350,8 @@ class AIFF(FileType):
         except ID3Error as e:
             raise error(e)
 
-        try:
-            fileobj = open(filename, "rb")
+        with open(filename, "rb") as fileobj:
             self.info = AIFFInfo(fileobj)
-        finally:
-            fileobj.close()
 
 
 Open = AIFF

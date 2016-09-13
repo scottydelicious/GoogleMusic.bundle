@@ -17,7 +17,8 @@ import codecs
 
 from fnmatch import fnmatchcase
 
-from ._compat import chr_, PY2, iteritems, iterbytes, integer_types, xrange
+from ._compat import chr_, PY2, iteritems, iterbytes, integer_types, xrange, \
+    izip
 
 
 class MutagenError(Exception):
@@ -25,6 +26,8 @@ class MutagenError(Exception):
 
     .. versionadded:: 1.25
     """
+
+    __module__ = "mutagen"
 
 
 def total_ordering(cls):
@@ -70,13 +73,18 @@ def enum(cls):
             setattr(new_type, key, value_instance)
             map_[value] = key
 
-    def repr_(self):
+    def str_(self):
         if self in map_:
             return "%s.%s" % (type(self).__name__, map_[self])
-        else:
-            return "%s(%s)" % (type(self).__name__, self)
+        return "%d" % int(self)
+
+    def repr_(self):
+        if self in map_:
+            return "<%s.%s: %d>" % (type(self).__name__, map_[self], int(self))
+        return "%d" % int(self)
 
     setattr(new_type, "__repr__", repr_)
+    setattr(new_type, "__str__", str_)
 
     return new_type
 
@@ -123,7 +131,7 @@ class DictMixin(object):
         itervalues = lambda self: iter(self.values())
 
     def items(self):
-        return list(zip(self.keys(), self.values()))
+        return list(izip(self.keys(), self.values()))
 
     if PY2:
         iteritems = lambda s: iter(s.items())
@@ -258,8 +266,8 @@ class cdata(object):
     error = error
 
     bitswap = b''.join(
-        chr_(sum(((val >> i) & 1) << (7 - i) for i in range(8)))
-        for val in range(256))
+        chr_(sum(((val >> i) & 1) << (7 - i) for i in xrange(8)))
+        for val in xrange(256))
 
     test_bit = staticmethod(lambda value, n: bool((value >> n) & 1))
 
@@ -267,45 +275,19 @@ class cdata(object):
 _fill_cdata(cdata)
 
 
-def lock(fileobj):
-    """Lock a file object 'safely'.
+def get_size(fileobj):
+    """Returns the size of the file object. The position when passed in will
+    be preserved if no error occurs.
 
-    That means a failure to lock because the platform doesn't
-    support fcntl or filesystem locks is not considered a
-    failure. This call does block.
-
-    Returns whether or not the lock was successful, or
-    raises an exception in more extreme circumstances (full
-    lock table, invalid file).
+    In case of an error raises IOError.
     """
 
+    old_pos = fileobj.tell()
     try:
-        import fcntl
-    except ImportError:
-        return False
-    else:
-        try:
-            fcntl.lockf(fileobj, fcntl.LOCK_EX)
-        except IOError:
-            # FIXME: There's possibly a lot of complicated
-            # logic that needs to go here in case the IOError
-            # is EACCES or EAGAIN.
-            return False
-        else:
-            return True
-
-
-def unlock(fileobj):
-    """Unlock a file object.
-
-    Don't call this on a file object unless a call to lock()
-    returned true.
-    """
-
-    # If this fails there's a mismatched lock/unlock pair,
-    # so we definitely don't want to ignore errors.
-    import fcntl
-    fcntl.lockf(fileobj, fcntl.LOCK_UN)
+        fileobj.seek(0, 2)
+        return fileobj.tell()
+    finally:
+        fileobj.seek(old_pos, 0)
 
 
 def insert_bytes(fobj, size, offset, BUFFER_SIZE=2 ** 16):
@@ -318,56 +300,52 @@ def insert_bytes(fobj, size, offset, BUFFER_SIZE=2 ** 16):
 
     assert 0 < size
     assert 0 <= offset
-    locked = False
+
     fobj.seek(0, 2)
     filesize = fobj.tell()
     movesize = filesize - offset
     fobj.write(b'\x00' * size)
     fobj.flush()
+
     try:
+        import mmap
+        file_map = mmap.mmap(fobj.fileno(), filesize + size)
         try:
-            import mmap
-            file_map = mmap.mmap(fobj.fileno(), filesize + size)
-            try:
-                file_map.move(offset + size, offset, movesize)
-            finally:
-                file_map.close()
-        except (ValueError, EnvironmentError, ImportError):
-            # handle broken mmap scenarios
-            locked = lock(fobj)
-            fobj.truncate(filesize)
+            file_map.move(offset + size, offset, movesize)
+        finally:
+            file_map.close()
+    except (ValueError, EnvironmentError, ImportError, AttributeError):
+        # handle broken mmap scenarios, BytesIO()
+        fobj.truncate(filesize)
 
-            fobj.seek(0, 2)
-            padsize = size
-            # Don't generate an enormous string if we need to pad
-            # the file out several megs.
-            while padsize:
-                addsize = min(BUFFER_SIZE, padsize)
-                fobj.write(b"\x00" * addsize)
-                padsize -= addsize
+        fobj.seek(0, 2)
+        padsize = size
+        # Don't generate an enormous string if we need to pad
+        # the file out several megs.
+        while padsize:
+            addsize = min(BUFFER_SIZE, padsize)
+            fobj.write(b"\x00" * addsize)
+            padsize -= addsize
 
-            fobj.seek(filesize, 0)
-            while movesize:
-                # At the start of this loop, fobj is pointing at the end
-                # of the data we need to move, which is of movesize length.
-                thismove = min(BUFFER_SIZE, movesize)
-                # Seek back however much we're going to read this frame.
-                fobj.seek(-thismove, 1)
-                nextpos = fobj.tell()
-                # Read it, so we're back at the end.
-                data = fobj.read(thismove)
-                # Seek back to where we need to write it.
-                fobj.seek(-thismove + size, 1)
-                # Write it.
-                fobj.write(data)
-                # And seek back to the end of the unmoved data.
-                fobj.seek(nextpos)
-                movesize -= thismove
+        fobj.seek(filesize, 0)
+        while movesize:
+            # At the start of this loop, fobj is pointing at the end
+            # of the data we need to move, which is of movesize length.
+            thismove = min(BUFFER_SIZE, movesize)
+            # Seek back however much we're going to read this frame.
+            fobj.seek(-thismove, 1)
+            nextpos = fobj.tell()
+            # Read it, so we're back at the end.
+            data = fobj.read(thismove)
+            # Seek back to where we need to write it.
+            fobj.seek(-thismove + size, 1)
+            # Write it.
+            fobj.write(data)
+            # And seek back to the end of the unmoved data.
+            fobj.seek(nextpos)
+            movesize -= thismove
 
-            fobj.flush()
-    finally:
-        if locked:
-            unlock(fobj)
+        fobj.flush()
 
 
 def delete_bytes(fobj, size, offset, BUFFER_SIZE=2 ** 16):
@@ -378,39 +356,50 @@ def delete_bytes(fobj, size, offset, BUFFER_SIZE=2 ** 16):
     falls back to a significantly slower method if mmap fails.
     """
 
-    locked = False
     assert 0 < size
     assert 0 <= offset
+
     fobj.seek(0, 2)
     filesize = fobj.tell()
     movesize = filesize - offset - size
     assert 0 <= movesize
-    try:
-        if movesize > 0:
-            fobj.flush()
+
+    if movesize > 0:
+        fobj.flush()
+        try:
+            import mmap
+            file_map = mmap.mmap(fobj.fileno(), filesize)
             try:
-                import mmap
-                file_map = mmap.mmap(fobj.fileno(), filesize)
-                try:
-                    file_map.move(offset, offset + size, movesize)
-                finally:
-                    file_map.close()
-            except (ValueError, EnvironmentError, ImportError):
-                # handle broken mmap scenarios
-                locked = lock(fobj)
+                file_map.move(offset, offset + size, movesize)
+            finally:
+                file_map.close()
+        except (ValueError, EnvironmentError, ImportError, AttributeError):
+            # handle broken mmap scenarios, BytesIO()
+            fobj.seek(offset + size)
+            buf = fobj.read(BUFFER_SIZE)
+            while buf:
+                fobj.seek(offset)
+                fobj.write(buf)
+                offset += len(buf)
                 fobj.seek(offset + size)
                 buf = fobj.read(BUFFER_SIZE)
-                while buf:
-                    fobj.seek(offset)
-                    fobj.write(buf)
-                    offset += len(buf)
-                    fobj.seek(offset + size)
-                    buf = fobj.read(BUFFER_SIZE)
-        fobj.truncate(filesize - size)
-        fobj.flush()
-    finally:
-        if locked:
-            unlock(fobj)
+    fobj.truncate(filesize - size)
+    fobj.flush()
+
+
+def resize_bytes(fobj, old_size, new_size, offset):
+    """Resize an area in a file adding and deleting at the end of it.
+    Does nothing if no resizing is needed.
+    """
+
+    if new_size < old_size:
+        delete_size = old_size - new_size
+        delete_at = offset + new_size
+        delete_bytes(fobj, delete_size, delete_at)
+    elif new_size > old_size:
+        insert_size = new_size - old_size
+        insert_at = offset + old_size
+        insert_bytes(fobj, insert_size, insert_at)
 
 
 def dict_match(d, key, default=None):

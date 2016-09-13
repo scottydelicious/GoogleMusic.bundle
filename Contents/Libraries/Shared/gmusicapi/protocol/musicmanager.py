@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
 
 """Calls made by the Music Manager (related to uploading)."""
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+from six import raise_from
+
+standard_library.install_aliases()
+from builtins import *  # noqa
 
 import base64
 from collections import namedtuple
 import hashlib
+import itertools
 import os
-import sys
+import shutil
+from tempfile import NamedTemporaryFile
 
 import dateutil.parser
 from decorator import decorator
@@ -14,7 +22,7 @@ from google.protobuf.message import DecodeError
 import mutagen
 from oauth2client.client import OAuth2Credentials
 
-from gmusicapi.compat import json
+import json
 from gmusicapi.exceptions import CallFailure
 from gmusicapi.protocol import upload_pb2, locker_pb2, download_pb2
 from gmusicapi.protocol.shared import Call, ParseException, authtypes
@@ -23,7 +31,6 @@ from gmusicapi.utils import utils
 log = utils.DynamicClientLogger(__name__)
 
 
-# This url has SSL issues, hence the static_verify=False.
 _android_url = 'https://android.clients.google.com/upsj/'
 
 OAuthInfo = namedtuple('OAuthInfo', 'client_id client_secret scope redirect')
@@ -87,9 +94,7 @@ class MmCall(Call):
         try:
             res_msg.ParseFromString(response.content)
         except DecodeError as e:
-            trace = sys.exc_info()[2]
-            raise ParseException(str(e)), None, trace
-            pass
+            raise_from(ParseException(str(e)), e)
 
         return res_msg
 
@@ -102,7 +107,6 @@ class AuthenticateUploader(MmCall):
     """Sent to auth, reauth, or register our upload client."""
 
     static_url = _android_url + 'upauth'
-    static_verify = False
 
     @classmethod
     def check_success(cls, response, msg):
@@ -134,7 +138,6 @@ class AuthenticateUploader(MmCall):
 
 class UploadMetadata(MmCall):
     static_url = _android_url + 'metadata'
-    static_verify = False
 
     static_params = {'version': 1}
 
@@ -146,15 +149,30 @@ class UploadMetadata(MmCall):
         # converting sum to base64
         # removing trailing ===
 
-        # My implementation is _not_ the same hash the music manager will send;
-        # they strip tags first. But files are differentiated across accounts,
-        # so this shouldn't cause problems.
-
-        # This will attempt to reupload files if their tags change.
-
         m = hashlib.md5()
-        with open(filepath, 'rb') as f:
-            m.update(f.read())
+
+        try:
+            ext = os.path.splitext(filepath)[1]
+
+            # delete=False is needed because the NamedTemporaryFile
+            # can't be opened by name a second time on Windows otherwise.
+            with NamedTemporaryFile(suffix=ext, delete=False) as temp:
+                shutil.copy(filepath, temp.name)
+
+                audio = mutagen.File(temp.name, easy=True)
+                audio.delete()
+                audio.save()
+
+                while True:
+                    data = temp.read(65536)
+                    if not data:
+                        break
+                    m.update(data)
+        finally:
+            try:
+                os.remove(temp.name)
+            except OSError:
+                log.exception("Could not remove temporary file %r", temp.name)
 
         return base64.encodestring(m.digest())[:-3]
 
@@ -178,6 +196,10 @@ class UploadMetadata(MmCall):
         track.client_id = cls.get_track_clientid(filepath)
 
         extension = os.path.splitext(filepath)[1].upper()
+
+        if isinstance(extension, bytes):
+            extension = extension.decode('utf8')
+
         if extension:
             # Trim leading period if it exists (ie extension not empty).
             extension = extension[1:]
@@ -213,12 +235,12 @@ class UploadMetadata(MmCall):
         track.duration_millis = int(audio.info.length * 1000)
 
         try:
-            bitrate = int(audio.info.bitrate / 1000)
+            bitrate = audio.info.bitrate // 1000
         except AttributeError:
             # mutagen doesn't provide bitrate for some lossless formats (eg FLAC), so
             # provide an estimation instead. This shouldn't matter too much;
             # the bitrate will always be > 320, which is the highest scan and match quality.
-            bitrate = (track.estimated_size * 8) / track.duration_millis
+            bitrate = (track.estimated_size * 8) // track.duration_millis
 
         track.original_bit_rate = bitrate
 
@@ -230,7 +252,7 @@ class UploadMetadata(MmCall):
             success = utils.pb_set(msg, field_name, val)
 
             if not success:
-                log.info("could not pb_set track.%s = %r for '%s'", field_name, val, filepath)
+                log.info("could not pb_set track.%s = %r for '%r'", field_name, val, filepath)
 
             return success
 
@@ -253,23 +275,29 @@ class UploadMetadata(MmCall):
             except (ValueError, TypeError) as e:
                 # TypeError provides compatibility with:
                 #  https://bugs.launchpad.net/dateutil/+bug/1247643
-                log.warning("could not parse date md for '%s': (%s)", filepath, e)
+                log.warning("could not parse date md for '%r': (%s)", filepath, e)
             else:
                 track_set('year', datetime.year)
 
         for null_field in ['artist', 'album']:
             # If these fields aren't provided, they'll render as "undefined" in the web interface;
-            # see https://github.com/simon-weber/Unofficial-Google-Music-API/issues/236.
+            # see https://github.com/simon-weber/gmusicapi/issues/236.
             # Defaulting them to an empty string fixes this.
             if null_field not in audio:
                 track_set(null_field, '')
 
+        if isinstance(audio, mutagen.mp3.EasyMP3):
+            # Mutagen tags the album artist as `performer` in EasyMP3 tags.
+            # https://bitbucket.org/lazka/mutagen/issue/195
+            if 'performer' in audio:
+                track_set('album_artist', audio['performer'][0])
+
         # Mass-populate the rest of the simple fields.
         # Merge shared and unshared fields into {mutagen: Track}.
         fields = dict(
-            dict((shared, shared) for shared in cls.shared_fields).items() +
-            cls.field_map.items()
-        )
+            itertools.chain(
+                ((shared, shared) for shared in cls.shared_fields),
+                cls.field_map.items()))
 
         for mutagen_f, track_f in fields.items():
             if mutagen_f in audio:
@@ -309,7 +337,6 @@ class UploadMetadata(MmCall):
 class GetUploadJobs(MmCall):
     # TODO
     static_url = _android_url + 'getjobs'
-    static_verify = False
 
     static_params = {'version': 1}
 
@@ -336,7 +363,7 @@ class GetUploadSession(MmCall):
     This is a json call, and doesn't share much with the other calls."""
 
     static_method = 'POST'
-    static_url = 'https://uploadsj.clients.google.com/uploadsj/rupio'
+    static_url = 'https://uploadsj.clients.google.com/uploadsj/scottyagent'
 
     @classmethod
     def parse_response(cls, response):
@@ -352,6 +379,10 @@ class GetUploadSession(MmCall):
         """track is a locker_pb2.Track, and the server_id is from a metadata upload."""
         # small info goes inline, big things get their own external PUT.
         # still not sure as to thresholds - I've seen big album art go inline.
+
+        if isinstance(filepath, bytes):
+            filepath = filepath.decode('utf8')
+
         inlined = {
             "title": "jumper-uploader-title-42",
             "ClientId": track.client_id,
@@ -386,7 +417,7 @@ class GetUploadSession(MmCall):
         # Insert the inline info.
         for key in inlined:
             payload = inlined[key]
-            if not isinstance(payload, basestring):
+            if not isinstance(payload, str):
                 payload = str(payload)
 
             message['createSessionRequest']['fields'].append(
@@ -473,7 +504,6 @@ class ProvideSample(MmCall):
     static_method = 'POST'
     static_params = {'version': 1}
     static_url = _android_url + 'sample'
-    static_verify = False
 
     @staticmethod
     @pb
@@ -498,8 +528,8 @@ class ProvideSample(MmCall):
             # transcoded into 128kbs mp3. The server dictates where the cut should be made.
             sample_msg.sample = utils.transcode_to_mp3(
                 filepath, quality='128k',
-                slice_start=sample_spec.start_millis / 1000,
-                slice_duration=sample_spec.duration_millis / 1000
+                slice_start=sample_spec.start_millis // 1000,
+                slice_duration=sample_spec.duration_millis // 1000
             )
         else:
             sample_msg.sample = mock_sample
@@ -520,7 +550,6 @@ class UpdateUploadState(MmCall):
     static_method = 'POST'
     static_params = {'version': 1}
     static_url = _android_url + 'sample'
-    static_verify = False
 
     @staticmethod
     @pb
@@ -551,7 +580,6 @@ class CancelUploadJobs(MmCall):
 
     static_method = 'POST'
     static_url = _android_url + 'deleteuploadrequested'
-    static_verify = False
 
     @staticmethod
     @pb

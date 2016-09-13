@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 
 """Utilities used in testing."""
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+from builtins import *  # noqa
 
 import logging
-import numbers
 import os
 import re
 
 
-# from gmusicapi.api import Api
-from gmusicapi.protocol.metadata import md_expectations
 from gmusicapi.utils import utils
 
 log = utils.DynamicClientLogger(__name__)
@@ -58,36 +59,6 @@ def new_test_client(cls, **kwargs):
     return client
 
 
-def modify_md(md_name, val):
-    """Returns a value of the same type as val that will not equal val."""
-
-    # Check for metadata that must get specific values.
-    if md_expectations[md_name].allowed_values is not None:
-        # Assume old_val is a possible value, and return
-        # the value one modulus index after it.
-
-        possible = md_expectations[md_name].allowed_values
-        val_i = 0
-        try:
-            val_i = possible.index(val)
-        except ValueError:
-            log.warning("non-allowed metadata value '%s' for key %s", val, md_name)
-
-        return possible[(val_i + 1) % len(possible)]
-
-    # Generic handlers for other data types.
-    if isinstance(val, basestring):
-        return val + "_mod"
-
-    # Need to check for bool first, bools are instances of Number for some reason.
-    elif isinstance(val, bool):
-        return not val
-    elif isinstance(val, numbers.Number):
-        return val + 1
-    else:
-        raise TypeError("modify expects only strings, numbers, and bools")
-
-
 def md_entry_same(entry_name, s1, s2):
     """Returns (s1 and s2 have the same value for entry_name?, message)."""
 
@@ -119,5 +90,5 @@ def is_id_list(lst):
 
 def is_id_pair_list(lst):
     """Returns True if the given list is made up of all (id, id) pairs."""
-    a, b = zip(*lst)
+    a, b = list(zip(*lst))
     return is_id_list(a + b)

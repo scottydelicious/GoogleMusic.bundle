@@ -3,13 +3,16 @@
 """
 Tests that don't hit the Google Music servers.
 """
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+from builtins import *  # noqa
 
 from collections import namedtuple
-import logging
 import os
 import time
 
-from mock import MagicMock, patch
+from mock import MagicMock
 from proboscis.asserts import (
     assert_raises, assert_true, assert_false, assert_equal,
     assert_is_not, Check
@@ -18,10 +21,9 @@ from proboscis import test
 
 import gmusicapi.session
 from gmusicapi.clients import Webclient, Musicmanager
-from gmusicapi.exceptions import AlreadyLoggedIn, CallFailure
-from gmusicapi.protocol.shared import authtypes, ClientLogin
+from gmusicapi.exceptions import AlreadyLoggedIn
+from gmusicapi.protocol.shared import authtypes
 from gmusicapi.protocol import mobileclient
-from gmusicapi.test.utils import NoticeLogging
 from gmusicapi.utils import utils, jsarray
 
 jsarray_samples = []
@@ -29,8 +31,8 @@ jsarray_filenames = [base + '.jsarray' for base in ('searchresult', 'fetchartist
 
 test_file_dir = os.path.dirname(os.path.abspath(__file__))
 for filepath in [os.path.join(test_file_dir, p) for p in jsarray_filenames]:
-    with open(filepath, 'r') as f:
-        jsarray_samples.append(f.read().decode('utf-8'))
+    with open(filepath, 'r', encoding="utf-8") as f:
+        jsarray_samples.append(f.read())
 
 # TODO test gather_local, transcoding
 
@@ -42,8 +44,8 @@ test = test(groups=['local'])
 def longest_increasing_sub():
     lisi = utils.longest_increasing_subseq
     assert_equal(lisi([]), [])
-    assert_equal(lisi(range(10, 0, -1)), [1])
-    assert_equal(lisi(range(10, 20)), range(10, 20))
+    assert_equal(lisi(list(range(10, 0, -1))), [1])
+    assert_equal(lisi(list(range(10, 20))), list(range(10, 20)))
     assert_equal(lisi([3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9]),
                  [1, 2, 3, 5, 8, 9])
 
@@ -173,29 +175,6 @@ def send_without_auth():
 # protocol
 #
 
-@test
-def clientlogin_raises_on_strange_response():
-    mock_session = MagicMock()
-    mock_res = MagicMock()
-    mock_res.status_code = 403
-    mock_res.text = (
-        'Error=BadAuthentication'
-        '\nUrl=https://www.google.com/accounts/...'
-        '\nInfo=WebLoginRequired')
-
-    mock_session.send = MagicMock(return_value=mock_res)
-
-    root_logger = logging.getLogger('gmusicapi')
-    noticer = [h for h in root_logger.handlers
-               if isinstance(h, NoticeLogging)][0]
-    with patch.object(noticer, 'emit', return_value=None) as mock_emit:
-        # This call should generate a warning.
-        # We don't want it to fail the build, though.
-        assert_raises(CallFailure,
-                      ClientLogin.perform,
-                      mock_session, False, 'email', 'pass')
-        assert_true(mock_emit.called)
-
 
 @test
 def authtypes_factory_defaults():
@@ -217,7 +196,7 @@ def authtypes_factory_args():
 def mc_url_signing():
     sig, _ = mobileclient.GetStreamUrl.get_signature("Tdr6kq3xznv5kdsphyojox6dtoq",
                                                      "1373247112519")
-    assert_equal(sig, "gua1gInBdaVo7_dSwF9y0kodua0")
+    assert_equal(sig, b"gua1gInBdaVo7_dSwF9y0kodua0")
 
 
 #

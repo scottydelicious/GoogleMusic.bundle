@@ -15,8 +15,9 @@ from ._specs import (
     EncodingSpec, ASPIIndexSpec, SizedIntegerSpec, IntegerSpec,
     VolumeAdjustmentsSpec, VolumePeakSpec, VolumeAdjustmentSpec,
     ChannelSpec, MultiSpec, SynchronizedTextSpec, KeyEventSpec, TimeStampSpec,
-    EncodedNumericPartTextSpec, EncodedNumericTextSpec, SpecError)
-from .._compat import text_type, string_types, swap_to_string, iteritems
+    EncodedNumericPartTextSpec, EncodedNumericTextSpec, SpecError,
+    PictureTypeSpec)
+from .._compat import text_type, string_types, swap_to_string, iteritems, izip
 
 
 def is_valid_frame_id(frame_id):
@@ -61,15 +62,17 @@ class Frame(object):
             # ask the sub class to fill in our data
             other._to_other(self)
         else:
-            for checker, val in zip(self._framespec, args):
-                setattr(self, checker.name, checker.validate(self, val))
+            for checker, val in izip(self._framespec, args):
+                setattr(self, checker.name, val)
             for checker in self._framespec[len(args):]:
-                try:
-                    validated = checker.validate(
-                        self, kwargs.get(checker.name, None))
-                except ValueError as e:
-                    raise ValueError("%s: %s" % (checker.name, e))
-                setattr(self, checker.name, validated)
+                setattr(self, checker.name, kwargs.get(checker.name))
+
+    def __setattr__(self, name, value):
+        for checker in self._framespec:
+            if checker.name == name:
+                self.__dict__[name] = checker.validate(self, value)
+                return
+        super(Frame, self).__setattr__(name, value)
 
     def _to_other(self, other):
         # this impl covers subclasses with the same framespec
@@ -170,8 +173,8 @@ class Frame(object):
                 except ValueError:
                     # Some things write synch-unsafe data with either the frame
                     # or global unsynch flag set. Try to load them as is.
-                    # https://bitbucket.org/lazka/mutagen/issue/210
-                    # https://bitbucket.org/lazka/mutagen/issue/223
+                    # https://github.com/quodlibet/mutagen/issues/210
+                    # https://github.com/quodlibet/mutagen/issues/223
                     pass
             if tflags & Frame.FLAG24_ENCRYPT:
                 raise ID3EncryptionUnsupportedError
@@ -221,10 +224,16 @@ class FrameOpt(Frame):
         super(FrameOpt, self).__init__(*args, **kwargs)
         for spec in self._optionalspec:
             if spec.name in kwargs:
-                validated = spec.validate(self, kwargs[spec.name])
-                setattr(self, spec.name, validated)
+                setattr(self, spec.name, kwargs[spec.name])
             else:
                 break
+
+    def __setattr__(self, name, value):
+        for checker in self._optionalspec:
+            if checker.name == name:
+                self.__dict__[name] = checker.validate(self, value)
+                return
+        super(FrameOpt, self).__setattr__(name, value)
 
     def _to_other(self, other):
         super(FrameOpt, self)._to_other(other)
@@ -1104,7 +1113,7 @@ class APIC(Frame):
     _framespec = [
         EncodingSpec('encoding'),
         Latin1TextSpec('mime'),
-        ByteSpec('type'),
+        PictureTypeSpec('type'),
         EncodedTextSpec('desc'),
         BinaryDataSpec('data'),
     ]
@@ -1834,7 +1843,7 @@ class PIC(APIC):
     _framespec = [
         EncodingSpec('encoding'),
         StringSpec('mime', 3),
-        ByteSpec('type'),
+        PictureTypeSpec('type'),
         EncodedTextSpec('desc'),
         BinaryDataSpec('data')
     ]
@@ -1894,7 +1903,13 @@ class LNK(LINK):
         if not isinstance(other, LINK):
             raise TypeError
 
-        other.frameid = self.frameid
+        if isinstance(other, LNK):
+            other.frameid = self.frameid
+        else:
+            try:
+                other.frameid = Frames_2_2[self.frameid].__bases__[0].__name__
+            except KeyError:
+                other.frameid = self.frameid.ljust(4)
         other.url = self.url
         if hasattr(self, "data"):
             other.data = self.data

@@ -22,7 +22,8 @@ __all__ = ["OggSpeex", "Open", "delete"]
 from mutagen import StreamInfo
 from mutagen._vorbis import VCommentDict
 from mutagen.ogg import OggPage, OggFileType, error as OggError
-from mutagen._util import cdata
+from mutagen._util import cdata, get_size
+from mutagen._tags import PaddingInfo
 
 
 class error(OggError):
@@ -34,19 +35,20 @@ class OggSpeexHeaderError(error):
 
 
 class OggSpeexInfo(StreamInfo):
-    """Ogg Speex stream information.
+    """Ogg Speex stream information."""
 
-    Attributes:
+    length = 0
+    """file length in seconds, as a float"""
 
-    * bitrate - nominal bitrate in bits per second
-    * channels - number of channels
-    * length - file length in seconds, as a float
+    channels = 0
+    """number of channels"""
+
+    bitrate = 0
+    """nominal bitrate in bits per second.
 
     The reference encoder does not set the bitrate; in this case,
     the bitrate will be 0.
     """
-
-    length = 0
 
     def __init__(self, fileobj):
         page = OggPage(fileobj)
@@ -79,10 +81,11 @@ class OggSpeexVComment(VCommentDict):
             if page.serial == info.serial:
                 pages.append(page)
                 complete = page.complete or (len(page.packets) > 1)
-        data = OggPage.to_packets(pages)[0] + b"\x01"
+        data = OggPage.to_packets(pages)[0]
         super(OggSpeexVComment, self).__init__(data, framing=False)
+        self._padding = len(data) - self._size
 
-    def _inject(self, fileobj):
+    def _inject(self, fileobj, padding_func):
         """Write tag data into the Speex comment packet/page."""
 
         fileobj.seek(0)
@@ -109,10 +112,17 @@ class OggSpeexVComment(VCommentDict):
 
         packets = OggPage.to_packets(old_pages, strict=False)
 
-        # Set the new comment packet.
-        packets[0] = self.write(framing=False)
+        content_size = get_size(fileobj) - len(packets[0])  # approx
+        vcomment_data = self.write(framing=False)
+        padding_left = len(packets[0]) - len(vcomment_data)
 
-        new_pages = OggPage.from_packets(packets, old_pages[0].sequence)
+        info = PaddingInfo(padding_left, content_size)
+        new_padding = info._get_padding(padding_func)
+
+        # Set the new comment packet.
+        packets[0] = vcomment_data + b"\x00" * new_padding
+
+        new_pages = OggPage._from_packets_try_preserve(packets, old_pages)
         OggPage.replace(fileobj, old_pages, new_pages)
 
 
@@ -123,6 +133,12 @@ class OggSpeex(OggFileType):
     _Tags = OggSpeexVComment
     _Error = OggSpeexHeaderError
     _mimes = ["audio/x-speex"]
+
+    info = None
+    """A `OggSpeexInfo`"""
+
+    tags = None
+    """A `VCommentDict`"""
 
     @staticmethod
     def score(filename, fileobj, header):

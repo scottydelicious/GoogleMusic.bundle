@@ -3,7 +3,7 @@
 """
 
 from unittest import TestCase
-
+import re
 import validictory
 
 
@@ -17,6 +17,15 @@ class TestEnum(TestCase):
             for item in data:
                 validictory.validate(item, self.schema)
                 validictory.validate(item, self.schema2)
+        except ValueError as e:
+            self.fail("Unexpected failure: %s" % e)
+
+    def test_enum_blank(self):
+        blank_schema = {"enum": ("test", True, 123, ["???"]), "blank": True}
+        data = ["test", True, 123, ["???"], ""]
+        try:
+            for item in data:
+                validictory.validate(item, blank_schema)
         except ValueError as e:
             self.fail("Unexpected failure: %s" % e)
 
@@ -53,6 +62,19 @@ class TestPattern(TestCase):
 
         self.assertRaises(ValueError, validictory.validate, data, self.schema)
 
+    def test_regex_compiled(self):
+        data = "my.email01@gmail.com"
+        re_schema = {'pattern': re.compile(
+            "^[A-Za-z0-9][A-Za-z0-9\.]*@([A-Za-z0-9]+\.)+[A-Za-z0-9]+$")}
+
+        try:
+            validictory.validate(data, re_schema)
+        except ValueError as e:
+            self.fail("Unexpected failure: %s" % e)
+
+        data = "whatever"
+        self.assertRaises(ValueError, validictory.validate, data, re_schema)
+
 
 def validate_format_contains_spaces(validator, fieldname, value,
                                     format_option):
@@ -65,7 +87,7 @@ def validate_format_contains_spaces(validator, fieldname, value,
 
 
 def validate_format_dict_not_empty(validator, fieldname, value,
-                               format_option):
+                                   format_option):
     if len(value.keys()) > 0:
         return
 

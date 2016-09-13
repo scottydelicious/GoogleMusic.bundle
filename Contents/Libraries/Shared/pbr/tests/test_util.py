@@ -17,7 +17,6 @@ import textwrap
 
 import six
 from six.moves import configparser
-import testscenarios
 
 from pbr.tests import base
 from pbr import util
@@ -46,10 +45,11 @@ class TestExtrasRequireParsingScenarios(base.BaseTestCase):
                     foo:python_version=='2.6'
                     bar
                     baz<1.6 :python_version=='2.6'
+                    zaz :python_version>'1.0'
                 """,
             'expected_extra_requires': {
                 "test:(python_version=='2.6')": ['foo', 'baz<1.6'],
-                "test": ['bar']}}),
+                "test": ['bar', 'zaz']}}),
         ('no_extras', {
             'config_text': """
             [metadata]
@@ -76,5 +76,8 @@ class TestExtrasRequireParsingScenarios(base.BaseTestCase):
                          kwargs['extras_require'])
 
 
-def load_tests(loader, in_tests, pattern):
-    return testscenarios.load_tests_apply_scenarios(loader, in_tests, pattern)
+class TestInvalidMarkers(base.BaseTestCase):
+
+    def test_invalid_marker_raises_error(self):
+        config = {'extras': {'test': "foo :bad_marker>'1.0'"}}
+        self.assertRaises(SyntaxError, util.setup_cfg_to_setup_kwargs, config)

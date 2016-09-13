@@ -39,6 +39,7 @@ from struct import unpack, pack, error as StructError
 
 import mutagen
 from mutagen._util import insert_bytes, delete_bytes, DictProxy, enum
+from mutagen._tags import PaddingInfo
 from .._compat import chr_, PY3
 
 from ._util import *
@@ -140,7 +141,7 @@ class ID3Header(object):
                 # a frame, and if it's *not* a frame we're going to be
                 # completely lost anyway, this seems to be the most
                 # correct check.
-                # http://code.google.com/p/quodlibet/issues/detail?id=126
+                # https://github.com/quodlibet/quodlibet/issues/126
                 self._flags ^= 0x40
                 extsize = 0
                 fileobj.seek(-4, 1)
@@ -247,6 +248,7 @@ class ID3(DictProxy, mutagen.Metadata):
         self.unknown_frames = []
         self.__known_frames = known_frames
         self._header = None
+        self._padding = 0  # for testing
 
         with open(filename, 'rb') as fileobj:
             self._pre_load_header(fileobj)
@@ -352,6 +354,11 @@ class ID3(DictProxy, mutagen.Metadata):
         """Add a frame to the tag."""
         return self.loaded_frame(frame)
 
+    def __setitem__(self, key, tag):
+        if not isinstance(tag, Frame):
+            raise TypeError("%r not a Frame instance" % tag)
+        super(ID3, self).__setitem__(key, tag)
+
     def __read_frames(self, data, frames):
         assert self.version >= ID3Header._V22
 
@@ -379,6 +386,7 @@ class ID3(DictProxy, mutagen.Metadata):
                 size = bpi(size)
                 framedata = data[10:10 + size]
                 data = data[10 + size:]
+                self._padding = len(data)
                 if size == 0:
                     continue  # drop empty frames
 
@@ -418,6 +426,7 @@ class ID3(DictProxy, mutagen.Metadata):
 
                 framedata = data[6:6 + size]
                 data = data[6 + size:]
+                self._padding = len(data)
                 if size == 0:
                     continue  # drop empty frames
 
@@ -441,7 +450,8 @@ class ID3(DictProxy, mutagen.Metadata):
                     except ID3JunkFrameError:
                         pass
 
-    def _prepare_framedata(self, v2_version, v23_sep):
+    def _prepare_data(self, fileobj, start, available, v2_version, v23_sep,
+                      pad_func):
         if v2_version == 3:
             version = ID3Header._V23
         elif v2_version == 4:
@@ -465,29 +475,31 @@ class ID3(DictProxy, mutagen.Metadata):
             framedata.extend(data for data in self.unknown_frames
                              if len(data) > 10)
 
-        return b''.join(framedata)
+        needed = sum(map(len, framedata)) + 10
 
-    def _prepare_id3_header(self, original_header, framesize, v2_version):
-        try:
-            id3, vmaj, vrev, flags, insize = \
-                unpack('>3sBBB4s', original_header)
-        except struct.error:
-            id3, insize = b'', 0
-        insize = BitPaddedInt(insize)
-        if id3 != b'ID3':
-            insize = -10
+        fileobj.seek(0, 2)
+        trailing_size = fileobj.tell() - start
 
-        if insize >= framesize:
-            outsize = insize
-        else:
-            outsize = (framesize + 1023) & ~0x3FF
+        info = PaddingInfo(available - needed, trailing_size)
+        new_padding = info._get_padding(pad_func)
+        if new_padding < 0:
+            raise error("invalid padding")
+        new_size = needed + new_padding
 
-        framesize = BitPaddedInt.to_str(outsize, width=4)
-        header = pack('>3sBBB4s', b'ID3', v2_version, 0, 0, framesize)
+        new_framesize = BitPaddedInt.to_str(new_size - 10, width=4)
+        header = pack('>3sBBB4s', b'ID3', v2_version, 0, 0, new_framesize)
 
-        return (header, outsize, insize)
+        data = bytearray(header)
+        for frame in framedata:
+            data += frame
+        assert new_size >= len(data)
+        data += (new_size - len(data)) * b'\x00'
+        assert new_size == len(data)
 
-    def save(self, filename=None, v1=1, v2_version=4, v23_sep='/'):
+        return data
+
+    def save(self, filename=None, v1=1, v2_version=4, v23_sep='/',
+             padding=None):
         """Save changes to a file.
 
         Args:
@@ -504,27 +516,22 @@ class ID3(DictProxy, mutagen.Metadata):
                 the separator used to join multiple text values
                 if v2_version == 3. Defaults to '/' but if it's None
                 will be the ID3v2v2.4 null separator.
+            padding (function):
+                A function taking a PaddingInfo which should
+                return the amount of padding to use. If None (default)
+                will default to something reasonable.
 
         By default Mutagen saves ID3v2.4 tags. If you want to save ID3v2.3
         tags, you must call method update_to_v23 before saving the file.
 
         The lack of a way to update only an ID3v1 tag is intentional.
+
+        Can raise id3.error.
         """
-
-        framedata = self._prepare_framedata(v2_version, v23_sep)
-        framesize = len(framedata)
-
-        if not framedata:
-            try:
-                self.delete(filename)
-            except EnvironmentError as err:
-                from errno import ENOENT
-                if err.errno != ENOENT:
-                    raise
-            return
 
         if filename is None:
             filename = self.filename
+
         try:
             f = open(filename, 'rb+')
         except IOError as err:
@@ -533,16 +540,23 @@ class ID3(DictProxy, mutagen.Metadata):
                 raise
             f = open(filename, 'ab')  # create, then reopen
             f = open(filename, 'rb+')
+
         try:
-            idata = f.read(10)
+            try:
+                header = ID3Header(f)
+            except ID3NoHeaderError:
+                old_size = 0
+            else:
+                old_size = header.size
 
-            header = self._prepare_id3_header(idata, framesize, v2_version)
-            header, outsize, insize = header
+            data = self._prepare_data(
+                f, 0, old_size, v2_version, v23_sep, padding)
+            new_size = len(data)
 
-            data = header + framedata + (b'\x00' * (outsize - framesize))
-
-            if (insize < outsize):
-                insert_bytes(f, outsize - insize, insize + 10)
+            if (old_size < new_size):
+                insert_bytes(f, new_size - old_size, old_size)
+            elif (old_size > new_size):
+                delete_bytes(f, old_size - new_size, new_size)
             f.seek(0)
             f.write(data)
 
@@ -625,11 +639,6 @@ class ID3(DictProxy, mutagen.Metadata):
         if "TCON" in self:
             # Get rid of "(xx)Foobr" format.
             self["TCON"].genres = self["TCON"].genres
-
-        # ID3v2.2 LNK frames are just way too different to upgrade.
-        for frame in self.getall("LINK"):
-            if len(frame.frameid) != 4:
-                del self[frame.HashKey]
 
         mimes = {"PNG": "image/png", "JPG": "image/jpeg"}
         for pic in self.getall("APIC"):

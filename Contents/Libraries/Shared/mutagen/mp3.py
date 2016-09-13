@@ -11,9 +11,10 @@
 import os
 import struct
 
-from ._compat import endswith
+from ._compat import endswith, xrange
+from ._mp3util import XingHeader, XingHeaderError, VBRIHeader, VBRIHeaderError
 from mutagen import StreamInfo
-from mutagen._util import MutagenError
+from mutagen._util import MutagenError, enum
 from mutagen.id3 import ID3FileType, BitPaddedInt, delete
 
 __all__ = ["MP3", "Open", "delete", "MP3"]
@@ -31,8 +32,47 @@ class InvalidMPEGHeader(error, IOError):
     pass
 
 
+@enum
+class BitrateMode(object):
+
+    UNKNOWN = 0
+    """Probably a CBR file, but not sure"""
+
+    CBR = 1
+    """Constant Bitrate"""
+
+    VBR = 2
+    """Variable Bitrate"""
+
+    ABR = 3
+    """Average Bitrate (a variant of VBR)"""
+
+
+def _guess_xing_bitrate_mode(xing):
+
+    if xing.lame_header:
+        lame = xing.lame_header
+        if lame.vbr_method in (1, 8):
+            return BitrateMode.CBR
+        elif lame.vbr_method in (2, 9):
+            return BitrateMode.ABR
+        elif lame.vbr_method in (3, 4, 5, 6):
+            return BitrateMode.VBR
+        # everything else undefined, continue guessing
+
+    # info tags get only written by lame for cbr files
+    if xing.is_info:
+        return BitrateMode.CBR
+
+    # older lame and non-lame with some variant of vbr
+    if xing.vbr_scale != -1 or xing.lame_version:
+        return BitrateMode.VBR
+
+    return BitrateMode.UNKNOWN
+
+
 # Mode values.
-STEREO, JOINTSTEREO, DUALCHANNEL, MONO = range(4)
+STEREO, JOINTSTEREO, DUALCHANNEL, MONO = xrange(4)
 
 
 class MPEGInfo(StreamInfo):
@@ -47,8 +87,18 @@ class MPEGInfo(StreamInfo):
     Useful attributes:
 
     * length -- audio length, in seconds
+    * channels -- number of audio channels
     * bitrate -- audio bitrate, in bits per second
     * sketchy -- if true, the file may not be valid MPEG audio
+    * encoder_info -- a string containing encoder name and possibly version.
+                      In case a lame tag is present this will start with
+                      ``"LAME "``, if unknown it is empty, otherwise the
+                      text format is undefined.
+    * bitrate_mode -- a :class:`BitrateMode`
+
+    * track_gain -- replaygain track gain (89db) or None
+    * track_peak -- replaygain track peak or None
+    * album_gain -- replaygain album gain (89db) or None
 
     Useless attributes:
 
@@ -75,7 +125,7 @@ class MPEGInfo(StreamInfo):
     }
 
     __BITRATE[(2, 3)] = __BITRATE[(2, 2)]
-    for i in range(1, 4):
+    for i in xrange(1, 4):
         __BITRATE[(2.5, i)] = __BITRATE[(2, i)]
 
     # Map version to sample rates.
@@ -86,6 +136,9 @@ class MPEGInfo(StreamInfo):
     }
 
     sketchy = False
+    encoder_info = u""
+    bitrate_mode = BitrateMode.UNKNOWN
+    track_gain = track_peak = album_gain = album_peak = None
 
     def __init__(self, fileobj, offset=None):
         """Parse MPEG stream information from a file-like object.
@@ -169,6 +222,8 @@ class MPEGInfo(StreamInfo):
         else:
             raise HeaderNotFoundError("can't sync to an MPEG frame")
 
+        self.channels = 1 if self.mode == MONO else 2
+
         # There is a serious problem here, which is that many flags
         # in an MPEG header are backwards.
         self.version = [2.5, None, 2, 1][version]
@@ -207,45 +262,63 @@ class MPEGInfo(StreamInfo):
 
         # Try to find/parse the Xing header, which trumps the above length
         # and bitrate calculation.
-        fileobj.seek(offset, 0)
-        data = fileobj.read(32768)
+
+        if self.layer != 3:
+            return
+
+        # Xing
+        xing_offset = XingHeader.get_offset(self)
+        fileobj.seek(offset + frame_1 + xing_offset, 0)
         try:
-            xing = data[:-4].index(b"Xing")
-        except ValueError:
-            # Try to find/parse the VBRI header, which trumps the above length
-            # calculation.
-            try:
-                vbri = data[:-24].index(b"VBRI")
-            except ValueError:
-                pass
-            else:
-                # If a VBRI header was found, this is definitely MPEG audio.
-                self.sketchy = False
-                vbri_version = struct.unpack('>H', data[vbri + 4:vbri + 6])[0]
-                if vbri_version == 1:
-                    frame_count = struct.unpack(
-                        '>I', data[vbri + 14:vbri + 18])[0]
-                    samples = float(frame_size * frame_count)
-                    self.length = (samples / self.sample_rate) or self.length
+            xing = XingHeader(fileobj)
+        except XingHeaderError:
+            pass
         else:
-            # If a Xing header was found, this is definitely MPEG audio.
+            lame = xing.lame_header
             self.sketchy = False
-            flags = struct.unpack('>I', data[xing + 4:xing + 8])[0]
-            if flags & 0x1:
-                frame_count = struct.unpack('>I', data[xing + 8:xing + 12])[0]
-                samples = float(frame_size * frame_count)
-                self.length = (samples / self.sample_rate) or self.length
-            if flags & 0x2:
-                bitrate_data = struct.unpack(
-                    '>I', data[xing + 12:xing + 16])[0]
-                self.bitrate = int((bitrate_data * 8) // self.length)
+            self.bitrate_mode = _guess_xing_bitrate_mode(xing)
+            if xing.frames != -1:
+                samples = frame_size * xing.frames
+                if lame is not None:
+                    samples -= lame.encoder_delay_start
+                    samples -= lame.encoder_padding_end
+                self.length = float(samples) / self.sample_rate
+            if xing.bytes != -1 and self.length:
+                self.bitrate = int((xing.bytes * 8) / self.length)
+            if xing.lame_version:
+                self.encoder_info = u"LAME %s" % xing.lame_version
+            if lame is not None:
+                self.track_gain = lame.track_gain_adjustment
+                self.track_peak = lame.track_peak
+                self.album_gain = lame.album_gain_adjustment
+            return
+
+        # VBRI
+        vbri_offset = VBRIHeader.get_offset(self)
+        fileobj.seek(offset + frame_1 + vbri_offset, 0)
+        try:
+            vbri = VBRIHeader(fileobj)
+        except VBRIHeaderError:
+            pass
+        else:
+            self.bitrate_mode = BitrateMode.VBR
+            self.encoder_info = u"FhG"
+            self.sketchy = False
+            self.length = float(frame_size * vbri.frames) / self.sample_rate
+            if self.length:
+                self.bitrate = int((vbri.bytes * 8) / self.length)
 
     def pprint(self):
-        s = "MPEG %s layer %d, %d bps, %s Hz, %.2f seconds" % (
-            self.version, self.layer, self.bitrate, self.sample_rate,
-            self.length)
+        info = str(self.bitrate_mode).split(".", 1)[-1]
+        if self.bitrate_mode == BitrateMode.UNKNOWN:
+            info = u"CBR?"
+        if self.encoder_info:
+            info += ", %s" % self.encoder_info
+        s = u"MPEG %s layer %d, %d bps (%s), %s Hz, %d chn, %.2f seconds" % (
+            self.version, self.layer, self.bitrate, info,
+            self.sample_rate, self.channels, self.length)
         if self.sketchy:
-            s += " (sketchy)"
+            s += u" (sketchy)"
         return s
 
 
