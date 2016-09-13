@@ -1,12 +1,15 @@
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+from builtins import *  # noqa
 import logging
 
 from gmusicapi.utils import utils
+from future.utils import with_metaclass
 
 
-class _Base(object):
+class _Base(with_metaclass(utils.DocstringInheritMeta, object)):
     """Factors out common client setup."""
-
-    __metaclass__ = utils.DocstringInheritMeta
     _session_class = utils.NotImplementedField
 
     num_clients = 0  # used to disambiguate loggers
@@ -55,6 +58,7 @@ class _Base(object):
 
         logger_name = "gmusicapi.%s%s" % (logger_basename,
                                           _Base.num_clients)
+        self._cache = {}
         self.logger = logging.getLogger(logger_name)
         self.validate = validate
         self._verify_ssl = verify_ssl
@@ -84,11 +88,12 @@ class _Base(object):
         return self.session.is_authenticated
 
     def logout(self):
-        """Forgets local authentication in this Api instance.
+        """Forgets local authentication and cached properties in this Api instance.
         Returns ``True`` on success."""
 
         # note to clients: this will be called during __init__.
 
         self.session.logout()
+        self._cache.clear()  # Clear the instance of all cached properties.
         self.logger.info("logged out")
         return True

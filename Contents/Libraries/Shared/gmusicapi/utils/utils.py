@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
 
 """Utility functions used across api code."""
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+from past.builtins import basestring
+from builtins import *  # noqa
+from builtins import object
 
+import ast
 from bisect import bisect_left
 from distutils import spawn
 import errno
 import functools
 import inspect
+import itertools
 import logging
 import os
 import re
@@ -19,8 +27,8 @@ from decorator import decorator
 from google.protobuf.descriptor import FieldDescriptor
 
 from gmusicapi import __version__
-from gmusicapi.compat import my_appdirs
-from gmusicapi.exceptions import CallFailure, GmusicapiWarning
+from gmusicapi.appdirs import my_appdirs
+from gmusicapi.exceptions import CallFailure, GmusicapiWarning, NotSubscribed
 
 # this controls the crazy logging setup that checks the callstack;
 #  it should be monkey-patched to False after importing to disable it.
@@ -29,7 +37,7 @@ per_client_logging = True
 
 # Map descriptor.CPPTYPE -> python type.
 _python_to_cpp_types = {
-    long: ('int32', 'int64', 'uint32', 'uint64'),
+    int: ('int32', 'int64', 'uint32', 'uint64'),
     float: ('double', 'float'),
     bool: ('bool',),
     str: ('string',),
@@ -144,10 +152,10 @@ def longest_increasing_subseq(seq):
     # predecessor[j] = linked list of indices of best subsequence ending
     # at seq[j], in reverse order
     predecessor = [-1]
-    for i in xrange(1, len(seq)):
+    for i in range(1, len(seq)):
         # Find j such that:  seq[head[j - 1]] < seq[i] <= seq[head[j]]
         # seq[head[j]] is increasing, so use binary search.
-        j = bisect_left([seq[head[idx]] for idx in xrange(len(head))], seq[i])
+        j = bisect_left([seq[head[idx]] for idx in range(len(head))], seq[i])
 
         if j == len(head):
             head.append(i)
@@ -438,12 +446,8 @@ def locate_mp3_transcoder():
             transcoder_details[transcoder] = 'not installed'
             continue
 
-        proc = subprocess.Popen(
-            [cmd_path, '-codecs'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE)
-
-        stdout, stderr = proc.communicate()
+        with open(os.devnull, "w") as null:
+            stdout = subprocess.check_output([cmd_path, '-codecs'], stderr=null).decode("ascii")
         mp3_encoding_support = ('libmp3lame' in stdout and 'disable-libmp3lame' not in stdout)
         if mp3_encoding_support:
             transcoder_details[transcoder] = "mp3 encoding support"
@@ -501,12 +505,12 @@ def transcode_to_mp3(filepath, quality='320k', slice_start=None, slice_duration=
         audio_out, err_output = proc.communicate()
 
         if proc.returncode != 0:
-            err_output = ("(return code: %r)\n" % proc.returncode) + err_output
+            err_output = ("(return code: %r)\n" % proc.returncode) + err_output.decode("ascii")
             raise IOError  # handle errors in except
 
     except (OSError, IOError) as e:
 
-        err_msg = "transcoding command (%s) failed: %s. " % (' '.join(cmd), e)
+        err_msg = "transcoding command (%r) failed: %s. " % (' '.join(cmd), e)
 
         if 'No such file or directory' in str(e):
             err_msg += '\nffmpeg or avconv must be installed and in the system path.'
@@ -535,8 +539,10 @@ def truncate(x, max_els=100, recurse_levels=0):
 
     try:
         if len(x) > max_els:
-            if isinstance(x, basestring):
+            if isinstance(x, str):
                 return x[:max_els] + '...'
+            elif isinstance(x, basestring):
+                return x[:max_els] + b'...'
 
             if isinstance(x, dict):
                 if 'id' in x and 'titleNorm' in x:
@@ -545,7 +551,10 @@ def truncate(x, max_els=100, recurse_levels=0):
                     trunc['...'] = '...'
                     return trunc
                 else:
-                    return dict(x.items()[:max_els] + [('...', '...')])
+                    return dict(
+                        itertools.chain(
+                            itertools.islice(x.items(), 0, max_els),
+                            [('...', '...')]))
 
             if isinstance(x, list):
                 trunc = x[:max_els] + ['...']
@@ -567,7 +576,7 @@ def empty_arg_shortcircuit(return_code='[]', position=1):
     """Decorate a function to shortcircuit and return something immediately if
     the length of a positional arg is 0.
 
-    :param return_code: (optional) code to exec as the return value - default is a list.
+    :param return_code: (optional) simple expression to eval as the return value - default is a list
     :param position: (optional) the position of the expected list - default is 1.
     """
 
@@ -576,16 +585,13 @@ def empty_arg_shortcircuit(return_code='[]', position=1):
     # being mutated - there's only one, not a new one on each call.
     # Here we've got multiple things we'd like to
     # return, so we can't do that. Rather than make some kind of enum for
-    # 'accepted return values' I'm just allowing freedom to return anything.
-    # Less safe? Yes. More convenient? Definitely.
+    # 'accepted return values' I'm just allowing freedom to return basic values.
+    # ast.literal_eval only can evaluate most literal expressions (e.g. [] and {})
 
     @decorator
     def wrapper(function, *args, **kw):
         if len(args[position]) == 0:
-            # avoid polluting our namespace
-            ns = {}
-            exec 'retval = ' + return_code in ns
-            return ns['retval']
+            return ast.literal_eval(return_code)
         else:
             return function(*args, **kw)
 
@@ -613,6 +619,67 @@ def accept_singleton(expected_type, position=1):
         return function(*args, **kw)
 
     return wrapper
+
+
+@decorator
+def require_subscription(function, *args, **kwargs):
+    self = args[0]
+
+    if not self.is_subscribed:
+        raise NotSubscribed("%s requires a subscription." % func.__name__)
+
+    return function(*args, **kwargs)
+
+
+# Modification of recipe found at
+# https://wiki.python.org/moin/PythonDecoratorLibrary#Cached_Properties.
+class cached_property(object):
+    """Version of @property decorator that caches the result with a TTL.
+
+    Tracks the property's value and last refresh time in a dict attribute
+    of a class instance (``self._cache``) using the property name as the key.
+    """
+
+    def __init__(self, ttl=0):
+        self.ttl = ttl
+
+    def __call__(self, fget, doc=None):
+        self.fget = fget
+        self.__doc__ = doc or fget.__doc__
+        self.__name__ = fget.__name__
+        self.__module__ = fget.__module__
+
+        return self
+
+    def __get__(self, inst, owner):
+        now = time.time()
+
+        try:
+            value, last_update = inst._cache[self.__name__]
+
+            if (self.ttl > 0) and (now - last_update > self.ttl):
+                raise AttributeError
+        except (KeyError, AttributeError):
+            value = self.fget(inst)
+
+            try:
+                cache = inst._cache
+            except AttributeError:
+                cache = inst._cache = {}
+
+            cache[self.__name__] = (value, now)
+
+        return value
+
+    def __set__(self, inst, value):
+        raise AttributeError("Can't set cached properties")
+
+    def __delete__(self, inst):
+        try:
+            del inst._cache[self.__name__]
+        except (KeyError, AttributeError):
+            if not inst._cache:
+                inst._cache = {}
 
 
 # Used to mark a field as unimplemented.

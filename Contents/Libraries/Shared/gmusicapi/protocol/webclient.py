@@ -1,62 +1,29 @@
 # -*- coding: utf-8 -*-
 
 """Calls made by the web client."""
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+from six import raise_from
+
+standard_library.install_aliases()
+from builtins import *  # noqa
 
 import base64
 import copy
 import hmac
 import random
 import string
-import sys
 from hashlib import sha1
 
 import validictory
 
-from gmusicapi.compat import json
+import json
 from gmusicapi.exceptions import CallFailure, ValidationException
-from gmusicapi.protocol.metadata import md_expectations
 from gmusicapi.protocol.shared import Call, authtypes
 from gmusicapi.utils import utils, jsarray
 
 base_url = 'https://play.google.com/music/'
 service_url = base_url + 'services/'
-
-# Shared response schemas, built to include metadata expectations.
-song_schema = {
-    "type": "object",
-    "properties": dict(
-        (name, expt.get_schema()) for
-        name, expt in md_expectations.items()
-    ),
-    # don't allow metadata not in expectations
-    "additionalProperties": False
-}
-
-song_array = {
-    "type": "array",
-    "items": song_schema
-}
-
-pl_schema = {
-    "type": "object",
-    "properties": {
-        "continuation": {"type": "boolean"},
-        "playlist": song_array,
-        "playlistId": {"type": "string"},
-        "unavailableTrackCount": {"type": "integer"},
-        # unsure what this field does. sometimes it's not there.
-        "token": {"type": "string", "required": False},
-        # only appears when loading multiple playlists
-        "title": {"type": "string", "required": False},
-        "continuationToken": {"type": "string", "required": False},
-    },
-    "additionalProperties": False
-}
-
-pl_array = {
-    "type": "array",
-    "items": pl_schema
-}
 
 
 class Init(Call):
@@ -102,8 +69,7 @@ class WcCall(Call):
         try:
             return validictory.validate(msg, cls._res_schema)
         except ValueError as e:
-            trace = sys.exc_info()[2]
-            raise ValidationException(str(e)), None, trace
+            raise_from(ValidationException(str(e)), e)
 
     @classmethod
     def check_success(cls, response, msg):
@@ -330,13 +296,23 @@ class ChangeSongMetadata(WcCall):
         """
         :param songs: a list of dicts ``{'id': '...', 'albumArtUrl': '...'}``
         """
-        if any([s for s in songs if set(s.keys()) != set(['id', 'albumArtUrl'])]):
-            raise ValueError("ChangeSongMetadata only supports the 'id' and 'albumArtUrl' keys."
-                             " All other keys must be removed.")
+        supported = {'id', 'albumArtUrl', 'title', 'artist', 'albumArtist', 'album'}
+        for s in songs:
+            for k in s.keys():
+                if k not in supported:
+                    raise ValueError("ChangeSongMetadata only supports the the following keys: "
+                                     + str(supported) +
+                                     ". All other keys must be removed. Key encountered:" + k)
 
         # jsarray is just wonderful
         jsarray = [[session_id, 1]]
-        song_arrays = [[s['id'], None, s['albumArtUrl']] + [None] * 36 + [[]] for s in songs]
+        song_arrays = [[s['id'],
+                        s.get('title'),
+                        s.get('albumArtUrl'),
+                        s.get('artist'),
+                        s.get('album'),
+                        s.get('albumArtist')]
+                       + [None] * 33 + [[]] for s in songs]
         jsarray.append([song_arrays])
 
         return json.dumps(jsarray)
@@ -389,6 +365,8 @@ class GetStreamUrl(WcCall):
             'now': {'type': 'integer', 'required': False},
             'tier': {'type': 'integer', 'required': False},
             'replayGain': {'type': 'integer'},
+            'streamAuthId': {'type': 'string'},
+            'isFreeRadioUser': {'type': 'boolean'},
         },
         "additionalProperties": False
     }
@@ -396,7 +374,7 @@ class GetStreamUrl(WcCall):
     @staticmethod
     def dynamic_params(song_id):
 
-        # https://github.com/simon-weber/Unofficial-Google-Music-API/issues/137
+        # https://github.com/simon-weber/gmusicapi/issues/137
         # there are three cases when streaming:
         #   | track type              | guid songid? | slt/sig needed? |
         #    user-uploaded              yes            no
@@ -405,9 +383,10 @@ class GetStreamUrl(WcCall):
 
         # without the track['type'] field we can't tell between 1 and 2, but
         # include slt/sig anyway; the server ignores the extra params.
-        key = '27f7313e-f75d-445a-ac99-56386a5fe879'
+        key = '27f7313e-f75d-445a-ac99-56386a5fe879'.encode("ascii")
         salt = ''.join(random.choice(string.ascii_lowercase + string.digits) for x in range(12))
-        sig = base64.urlsafe_b64encode(hmac.new(key, (song_id + salt), sha1).digest())[:-1]
+        salted_id = (song_id + salt).encode("utf-8")
+        sig = base64.urlsafe_b64encode(hmac.new(key, salted_id, sha1).digest())[:-1]
 
         params = {
             'u': 0,
@@ -478,35 +457,23 @@ class GetSettings(WcCall):
     """Get data that populates the settings tab: labs and devices."""
 
     static_method = 'POST'
-    static_url = service_url + 'loadsettings'
+    static_url = service_url + 'fetchsettings'
 
     _device_schema = {
         'type': 'object',
         'additionalProperties': False,
         'properties': {
-            'date': {'type': 'integer',
-                     'format': 'utc-millisec'},
+            'deviceType': {'type': 'integer'},
             'id': {'type': 'string'},
+            'lastAccessedFormatted': {'type': 'string'},
+            'lastAccessedTimeMillis': {'type': 'integer'},
+            'lastEventTimeMillis': {'type': 'integer'},
             'name': {'type': 'string', 'blank': True},
-            'type': {'type': 'string'},
-            'lastUsedMs': {'type': 'integer'},
 
-            # only for type == PHONE:
+            # only for type == 2 (android phone?):
             'model': {'type': 'string', 'blank': True, 'required': False},
             'manufacturer': {'type': 'string', 'blank': True, 'required': False},
-
             'carrier': {'type': 'string', 'blank': True, 'required': False},
-        },
-    }
-
-    _lab_schema = {
-        'type': 'object',
-        'additionalProperties': False,
-        'properties': {
-            'description': {'type': 'string'},
-            'enabled': {'type': 'boolean'},
-            'name': {'type': 'string'},
-            'title': {'type': 'string'},
         },
     }
 
@@ -518,21 +485,34 @@ class GetSettings(WcCall):
                 'type': 'object',
                 'additionalProperties': False,
                 'properties': {
-                    'devices': {'type': 'array', 'items': _device_schema},
-                    'labs': {'type': 'array', 'items': _lab_schema},
-                    'maxTracks': {'type': 'integer'},
-                    'expirationMillis': {
-                        'type': 'integer',
-                        'format': 'utc-millisec',
-                        'required': False,
-                    },
-                    'isSubscription': {'type': 'boolean', 'required': False},
-                    'isTrial': {'type': 'boolean', 'required': False},
-                    'hasFreeTrial': {'type': 'boolean', 'required': False},
-                    'subscriptionNewsletter': {'type': 'boolean'},
-                    'isCanceled': {'type': 'boolean', 'required': False},
-                },
-            },
+                    'entitlementInfo': {
+                        'type': 'object',
+                        'additionalProperties': False,
+                        'properties': {
+                            'expirationMillis': {'type': 'integer', 'required': False},
+                            'isCanceled': {'type': 'boolean'},
+                            'isSubscription': {'type': 'boolean'},
+                            'isTrial': {'type': 'boolean'},
+                        }},
+                    'lab': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'additionalProperties': False,
+                            'properties': {
+                                'description': {'type': 'string'},
+                                'enabled': {'type': 'boolean'},
+                                'displayName': {'type': 'string'},
+                                'experimentName': {'type': 'string'},
+                            },
+                        }},
+                    'maxUploadedTracks': {'type': 'integer'},
+                    'subscriptionNewsletter': {'type': 'boolean', 'required': False},
+                    'uploadDevice': {
+                        'type': 'array',
+                        'items': _device_schema,
+                    }},
+            }
         },
     }
 

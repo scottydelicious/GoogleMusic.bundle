@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 
 """Definitions shared by multiple clients."""
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+from builtins import *  # noqa
+from six import raise_from
 
 from collections import namedtuple
-import sys
 
 from google.protobuf.descriptor import FieldDescriptor
 
-import gmusicapi
-from gmusicapi.compat import json
+import json
 from gmusicapi.exceptions import (
     CallFailure, ParseException, ValidationException,
 )
 from gmusicapi.utils import utils
 
 import requests
+from future.utils import with_metaclass
 
 log = utils.DynamicClientLogger(__name__)
 
@@ -96,7 +100,7 @@ class BuildRequestMeta(type):
         return new_cls
 
 
-class Call(object):
+class Call(with_metaclass(BuildRequestMeta, object)):
     """
     Clients should use Call.perform().
 
@@ -147,8 +151,6 @@ class Call(object):
 
     Calls are organized semantically, so one endpoint might have multiple calls.
     """
-
-    __metaclass__ = BuildRequestMeta
 
     gets_logged = True
     fail_on_non_200 = True
@@ -221,7 +223,7 @@ class Call(object):
 
                 if cls.gets_logged:
                     err_msg += "\n(requests kwargs: %r)" % (safe_req_kwargs)
-                    err_msg += "\n(response was: %r)" % response.content
+                    err_msg += "\n(response was: %r)" % response.text
 
                 raise CallFailure(err_msg, call_name)
 
@@ -232,8 +234,8 @@ class Call(object):
                        " The call may still have succeeded, but it's unlikely.")
             if cls.gets_logged:
                 err_msg += "\n(requests kwargs: %r)" % (safe_req_kwargs)
-                err_msg += "\n(response was: %r)" % response.content
-                log.exception("could not parse %s response: %r", call_name, response.content)
+                err_msg += "\n(response was: %r)" % response.text
+                log.exception("could not parse %s response: %r", call_name, response.text)
             else:
                 log.exception("could not parse %s response: (omitted)", call_name)
 
@@ -252,14 +254,13 @@ class Call(object):
                 raise
 
             # otherwise, reraise a new exception with our req/res context
-            trace = sys.exc_info()[2]
             err_msg = ("{e_message}\n"
                        "(requests kwargs: {req_kwargs!r})\n"
                        "(response was: {content!r})").format(
-                           e_message=e.message,
+                           e_message=str(e),
                            req_kwargs=safe_req_kwargs,
-                           content=response.content)
-            raise CallFailure(err_msg, e.callname), None, trace
+                           content=response.text)
+            raise_from(CallFailure(err_msg, e.callname), e)
 
         except ValidationException as e:
             # TODO shouldn't be using formatting
@@ -267,10 +268,10 @@ class Call(object):
             err_msg += "\n\n%s\n" % e
 
             if cls.gets_logged:
-                raw_response = response.content
+                raw_response = response.text
 
-                if len(raw_response) > 1000:
-                    raw_response = raw_response[:1000] + '...'
+                if len(raw_response) > 10000:
+                    raw_response = raw_response[:10000] + '...'
 
                 err_msg += ("\nFirst, try the develop branch."
                             " If you can recreate this error with the most recent code"
@@ -288,8 +289,7 @@ class Call(object):
         try:
             return json.loads(text)
         except ValueError as e:
-            trace = sys.exc_info()[2]
-            raise ParseException(str(e)), None, trace
+            raise_from(ParseException(str(e)), e)
 
     @staticmethod
     def _filter_proto(msg, make_copy=True):
@@ -308,7 +308,7 @@ class Call(object):
         # Filter all byte fields.
         for field_name, val in ((fd.name, val) for fd, val in fields
                                 if fd.type == FieldDescriptor.TYPE_BYTES):
-            setattr(filtered, field_name, "<%s bytes>" % len(val))
+            setattr(filtered, field_name, bytes("<%s bytes>" % len(val), 'utf8'))
 
         # Filter submessages.
         for field in (val for fd, val in fields
@@ -330,80 +330,3 @@ class Call(object):
                                   for f in old_fields])
 
         return filtered
-
-
-class ClientLogin(Call):
-    """Performs `Google ClientLogin
-    <https://developers.google.com/accounts/docs/AuthForInstalledApps#ClientLogin>`__."""
-
-    gets_logged = False
-
-    fail_on_non_200 = False
-    # The protocol does return 200 and 403 when it makes sense,
-    # but shortcircuiting on non-200s won't allow us to attach error
-    # context in check_success.
-
-    static_method = 'POST'
-    # static_headers = {'User-agent': 'Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1'}
-    static_url = 'https://www.google.com/accounts/ClientLogin'
-
-    @classmethod
-    def dynamic_data(cls, Email, Passwd, accountType='HOSTED_OR_GOOGLE',
-                     service='sj', source=None,
-                     logintoken=None, logincaptcha=None):
-        """Params align with those in the actual request.
-
-        If *source* is ``None``, ``'gmusicapi-<version>'`` is used.
-
-        Captcha requests are not yet implemented.
-        """
-        if logintoken is not None or logincaptcha is not None:
-            raise ValueError('ClientLogin captcha handling is not yet implemented.')
-
-        if source is None:
-            source = 'gmusicapi-' + gmusicapi.__version__
-
-        return dict(
-            (name, val) for (name, val) in locals().items()
-            if name in set(('Email', 'Passwd', 'accountType', 'service', 'source',
-                            'logintoken', 'logincaptcha'))
-        )
-
-    @classmethod
-    def parse_response(cls, response):
-        """Return a dictionary of response key/vals.
-
-        A successful login will have SID, LSID, and Auth keys.
-        """
-
-        # responses are formatted as, eg:
-        #    SID=DQAAAGgA...7Zg8CTN
-        #    LSID=DQAAAGsA...lk8BBbG
-        #    Auth=DQAAAGgA...dk3fA5N
-        # or:
-        #    Url=http://www.google.com/login/captcha
-        #    Error=CaptchaRequired
-        #    CaptchaToken=DQAAAGgA...dkI1LK9
-        #    CaptchaUrl=Captcha?ctoken=HiteT...
-
-        ret = {}
-        for line in response.text.split('\n'):
-            if '=' in line:
-                var, val = line.split('=', 1)
-                ret[var] = val
-
-        return ret
-
-    @classmethod
-    def check_success(cls, response, msg):
-        if response.status_code != 200:
-            if msg == {'Error': 'BadAuthentication'}:
-                raise CallFailure('Invalid login credentials', cls.__name__)
-
-            log.warning("Received strange login response: %r"
-                        "\n\nYou may need to enable less secure logins:\n"
-                        "  https://www.google.com/settings/security/lesssecureapps", msg)
-
-            raise CallFailure(
-                "status code %s != 200, full response: %r " % (response.status_code, msg),
-                cls.__name__)

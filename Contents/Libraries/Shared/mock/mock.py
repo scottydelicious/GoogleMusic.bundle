@@ -74,29 +74,11 @@ version_info = _v.version_tuple()
 
 import mock
 
-inPy3k = sys.version_info[0] == 3
-
-
 try:
     inspectsignature = inspect.signature
 except AttributeError:
     import funcsigs
     inspectsignature = funcsigs.signature
-    # Has funcsigs been fixed?
-    try:
-        class F:
-            def f(a, self):
-                pass
-        inspectsignature(partial(F.f, None)).bind(self=10)
-    except TypeError:
-        def fixedbind(*args, **kwargs):
-            self = args[0]
-            args = args[1:]
-            return self._bind(args, kwargs)
-        funcsigs.Signature.bind = fixedbind
-        del fixedbind
-    finally:
-        del F
 
 
 # TODO: use six.
@@ -118,7 +100,7 @@ except NameError:
     # Python 2.4 compatibility
     BaseException = Exception
 
-if not inPy3k:
+if six.PY2:
     # Python 2's next() can't handle a non-iterator with a __next__ method.
     _next = next
     def next(obj, _next=_next):
@@ -151,7 +133,7 @@ except AttributeError:
 
 self = 'im_self'
 builtin = '__builtin__'
-if inPy3k:
+if six.PY3:
     self = '__self__'
     builtin = 'builtins'
 
@@ -250,7 +232,7 @@ def _copy_func_details(func, funcopy):
         funcopy.__kwdefaults__ = func.__kwdefaults__
     except AttributeError:
         pass
-    if not inPy3k:
+    if six.PY2:
         funcopy.func_defaults = func.func_defaults
         return
 
@@ -276,7 +258,7 @@ def _instance_callable(obj):
         # already an instance
         return getattr(obj, '__call__', None) is not None
 
-    if inPy3k:
+    if six.PY3:
         # *could* be broken by a class overriding __mro__ or __dict__ via
         # a metaclass
         for base in (obj,) + obj.__mro__:
@@ -410,7 +392,7 @@ def _copy(value):
 
 
 ClassTypes = (type,)
-if not inPy3k:
+if six.PY2:
     ClassTypes = (type, ClassType)
 
 _allowed_names = set((
@@ -914,6 +896,24 @@ class NonCallableMock(Base):
                    (self._mock_name or 'mock', self.call_count))
             raise AssertionError(msg)
 
+    def assert_called(_mock_self):
+        """assert that the mock was called at least once
+        """
+        self = _mock_self
+        if self.call_count == 0:
+            msg = ("Expected '%s' to have been called." %
+                   self._mock_name or 'mock')
+            raise AssertionError(msg)
+
+    def assert_called_once(_mock_self):
+        """assert that the mock was called only once.
+        """
+        self = _mock_self
+        if not self.call_count == 1:
+            msg = ("Expected '%s' to have been called once. Called %s times." %
+                   (self._mock_name or 'mock', self.call_count))
+            raise AssertionError(msg)
+
     def assert_called_with(_mock_self, *args, **kwargs):
         """assert that the mock was called with the specified arguments.
 
@@ -926,7 +926,7 @@ class NonCallableMock(Base):
 
         def _error_message(cause):
             msg = self._format_mock_failure_message(args, kwargs)
-            if not inPy3k and cause is not None:
+            if six.PY2 and cause is not None:
                 # Tack on some diagnostics for Python without __cause__
                 msg = '%s\n%s' % (msg, str(cause))
             return msg
@@ -965,7 +965,7 @@ class NonCallableMock(Base):
             if expected not in all_calls:
                 six.raise_from(AssertionError(
                     'Calls not found.\nExpected: %r\n'
-                    'Actual: %r' % (calls, self.mock_calls)
+                    'Actual: %r' % (_CallList(calls), self.mock_calls)
                 ), cause)
             return
 
@@ -1480,7 +1480,10 @@ class _patch(object):
             setattr(self.target, self.attribute, self.temp_original)
         else:
             delattr(self.target, self.attribute)
-            if not self.create and not hasattr(self.target, self.attribute):
+            if not self.create and (not hasattr(self.target, self.attribute) or
+                        self.attribute in ('__doc__', '__module__',
+                                           '__defaults__', '__annotations__',
+                                           '__kwdefaults__')):
                 # needed for proxy objects like django settings
                 setattr(self.target, self.attribute, self.temp_original)
 
@@ -1826,12 +1829,12 @@ magic_methods = (
 numerics = (
     "add sub mul matmul div floordiv mod lshift rshift and xor or pow"
 )
-if inPy3k:
+if six.PY3:
     numerics += ' truediv'
 inplace = ' '.join('i%s' % n for n in numerics.split())
 right = ' '.join('r%s' % n for n in numerics.split())
 extra = ''
-if inPy3k:
+if six.PY3:
     extra = 'bool next '
 else:
     extra = 'unicode long nonzero oct hex truediv rtruediv '
@@ -2062,8 +2065,15 @@ def _format_call_signature(name, args, kwargs):
     message = '%s(%%s)' % name
     formatted_args = ''
     args_string = ', '.join([repr(arg) for arg in args])
+
+    def encode_item(item):
+        if six.PY2 and isinstance(item, unicode):
+            return item.encode("utf-8")
+        else:
+            return item
+
     kwargs_string = ', '.join([
-        '%s=%r' % (key, value) for key, value in sorted(kwargs.items())
+        '%s=%r' % (encode_item(key), value) for key, value in sorted(kwargs.items())
     ])
     if args_string:
         formatted_args = args_string
@@ -2165,8 +2175,7 @@ class _Call(tuple):
             else:
                 other_args = ()
                 other_kwargs = value
-        else:
-            # len 2
+        elif len_other == 2:
             # could be (name, args) or (name, kwargs) or (args, kwargs)
             first, second = other
             if isinstance(first, basestring):
@@ -2177,6 +2186,8 @@ class _Call(tuple):
                     other_args, other_kwargs = (), second
             else:
                 other_args, other_kwargs = first, second
+        else:
+            return False
 
         if self_name and other_name != self_name:
             return False
@@ -2438,9 +2449,10 @@ def _iterate_read_data(read_data):
     # Helper for mock_open:
     # Retrieve lines from read_data via a generator so that separate calls to
     # readline, read, and readlines are properly interleaved
-    data_as_list = ['{0}\n'.format(l) for l in read_data.split('\n')]
+    sep = b'\n' if isinstance(read_data, bytes) else '\n'
+    data_as_list = [l + sep for l in read_data.split(sep)]
 
-    if data_as_list[-1] == '\n':
+    if data_as_list[-1] == sep:
         # If the last line ended in a newline, the list comprehension will have an
         # extra entry that's just a newline.  Remove this.
         data_as_list = data_as_list[:-1]
@@ -2473,7 +2485,7 @@ def mock_open(mock=None, read_data=''):
     def _read_side_effect(*args, **kwargs):
         if handle.read.return_value is not None:
             return handle.read.return_value
-        return ''.join(_state[0])
+        return type(read_data)().join(_state[0])
 
     def _readline_side_effect():
         if handle.readline.return_value is not None:
@@ -2486,7 +2498,7 @@ def mock_open(mock=None, read_data=''):
     global file_spec
     if file_spec is None:
         # set on first use
-        if inPy3k:
+        if six.PY3:
             import _io
             file_spec = list(set(dir(_io.TextIOWrapper)).union(set(dir(_io.BytesIO))))
         else:

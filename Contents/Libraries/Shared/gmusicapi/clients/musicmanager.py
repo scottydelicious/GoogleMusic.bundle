@@ -1,7 +1,14 @@
+from __future__ import print_function, division, absolute_import, unicode_literals
+from future import standard_library
+standard_library.install_aliases()
+from past.builtins import basestring
+from builtins import *  # noqa
 import os
 from socket import gethostname
 import time
-import urllib
+import urllib.request
+import urllib.parse
+import urllib.error
 from uuid import getnode as getmac
 import webbrowser
 
@@ -11,7 +18,7 @@ import oauth2client.file
 
 import gmusicapi
 from gmusicapi.clients.shared import _Base
-from gmusicapi.compat import my_appdirs
+from gmusicapi.appdirs import my_appdirs
 from gmusicapi.exceptions import CallFailure, NotLoggedIn
 from gmusicapi.protocol import musicmanager, upload_pb2, locker_pb2
 from gmusicapi.utils import utils
@@ -74,19 +81,18 @@ class Musicmanager(_Base):
         flow = OAuth2WebServerFlow(*musicmanager.oauth)
 
         auth_uri = flow.step1_get_authorize_url()
-        print
-        print "Visit the following url:\n %s" % auth_uri
+        print()
+        print("Visit the following url:\n %s" % auth_uri)
 
         if open_browser:
-            print
-            print 'Opening your browser to it now...',
+            print()
+            print('Opening your browser to it now...', end=' ')
             webbrowser.open(auth_uri)
-            print 'done.'
-            print "If you don't see your browser, you can just copy and paste the url."
-            print
+            print('done.')
+            print("If you don't see your browser, you can just copy and paste the url.")
+            print()
 
-        code = raw_input("Follow the prompts,"
-                         " then paste the auth code here and hit enter: ")
+        code = input("Follow the prompts, then paste the auth code here and hit enter: ")
 
         credentials = flow.step2_exchange(code)
 
@@ -173,7 +179,7 @@ class Musicmanager(_Base):
 
             oauth_credentials = storage.get()
             if oauth_credentials is None:
-                self.logger.warning("could not retrieve oauth credentials from '%s'", oauth_file)
+                self.logger.warning("could not retrieve oauth credentials from '%r'", oauth_file)
                 return False
 
         if not self.session.login(oauth_credentials):
@@ -193,6 +199,7 @@ class Musicmanager(_Base):
         if uploader_id is None:
             mac_int = getmac()
             if (mac_int >> 40) % 2:
+                self.session.logout()
                 raise OSError('a valid MAC could not be determined.'
                               ' Provide uploader_id (and be'
                               ' sure to provide the same one on future runs).')
@@ -204,6 +211,7 @@ class Musicmanager(_Base):
             uploader_id = utils.create_mac_string(mac_int)
 
         if not utils.is_valid_mac(uploader_id):
+            self.session.logout()
             raise ValueError('uploader_id is not in a valid form.'
                              '\nProvide 6 pairs of hex digits'
                              ' with capital letters',
@@ -258,7 +266,7 @@ class Musicmanager(_Base):
     def get_uploaded_songs(self, incremental=False):
         """Returns a list of dictionaries, each with the following keys:
         ``('id', 'title', 'album', 'album_artist', 'artist', 'track_number',
-        'track_size')``.
+        'track_size', 'disc_number', 'total_disc_count')``.
 
         All Access tracks that were added to the library will not be included,
         only tracks uploaded/matched by the user.
@@ -276,6 +284,26 @@ class Musicmanager(_Base):
 
         return to_return
 
+    # mostly copy-paste from Webclient.get_all_songs.
+    # not worried about overlap in this case; the logic of either could change.
+    def get_purchased_songs(self, incremental=False):
+        """Returns a list of dictionaries, each with the following keys:
+        ``('id', 'title', 'album', 'album_artist', 'artist', 'track_number',
+        'track_size', 'disc_number', 'total_disc_count')``.
+
+        :param incremental: if True, return a generator that yields lists
+          of at most 1000 dictionaries
+          as they are retrieved from the server. This can be useful for
+          presenting a loading bar to a user.
+        """
+
+        to_return = self._get_all_songs(export_type=2)
+
+        if not incremental:
+            to_return = [song for chunk in to_return for song in chunk]
+
+        return to_return
+
     @staticmethod
     def _track_info_to_dict(track_info):
         """Given a download_pb2.DownloadTrackInfo, return a dictionary."""
@@ -284,9 +312,10 @@ class Musicmanager(_Base):
 
         return dict((field, getattr(track_info, field)) for field in
                     ('id', 'title', 'album', 'album_artist', 'artist',
-                     'track_number', 'track_size'))
+                     'track_number', 'track_size', 'disc_number',
+                     'total_disc_count'))
 
-    def _get_all_songs(self):
+    def _get_all_songs(self, export_type=1):
         """Return a generator of song chunks."""
 
         get_next_chunk = True
@@ -300,7 +329,8 @@ class Musicmanager(_Base):
         while get_next_chunk:
             lib_chunk = self._make_call(musicmanager.ListTracks,
                                         self.uploader_id,
-                                        lib_chunk.continuation_token)
+                                        lib_chunk.continuation_token,
+                                        export_type)
 
             yield [self._track_info_to_dict(info)
                    for info in lib_chunk.download_track_info]
@@ -309,14 +339,18 @@ class Musicmanager(_Base):
 
     @utils.enforce_id_param
     def download_song(self, song_id):
-        """Returns a tuple ``(u'suggested_filename', 'audio_bytestring')``.
+        """Download an uploaded or purchased song from your library.
+
+        Subscription tracks can't be downloaded with this method.
+
+        Returns a tuple ``(u'suggested_filename', 'audio_bytestring')``.
         The filename
         will be what the Music Manager would save the file as,
         presented as a unicode string with the proper file extension.
         You don't have to use it if you don't want.
 
 
-        :param song_id: a single song id.
+        :param song_id: a single uploaded or purchased song id.
 
         To write the song to disk, use something like::
 
@@ -345,8 +379,7 @@ class Musicmanager(_Base):
 
         cd_header = response.headers['content-disposition']
 
-        filename = urllib.unquote(cd_header.split("filename*=UTF-8''")[-1])
-        filename = filename.decode('utf-8')
+        filename = urllib.parse.unquote(cd_header.split("filename*=UTF-8''")[-1])
 
         return (filename, response.content)
 
@@ -358,7 +391,8 @@ class Musicmanager(_Base):
 
     @utils.accept_singleton(basestring)
     @utils.empty_arg_shortcircuit(return_code='{}')
-    def upload(self, filepaths, transcode_quality='320k', enable_matching=False):
+    def upload(self, filepaths, enable_matching=False,
+               enable_transcoding=True, transcode_quality='320k'):
         """Uploads the given filepaths.
 
         All non-mp3 files will be transcoded before being uploaded.
@@ -366,7 +400,7 @@ class Musicmanager(_Base):
 
         An available installation of ffmpeg or avconv is required in most cases:
         see `the installation page
-        <https://unofficial-google-music-api.readthedocs.org/en
+        <https://unofficial-google-music-api.readthedocs.io/en
         /latest/usage.html?#installation>`__ for details.
 
         Returns a 3-tuple ``(uploaded, matched, not_uploaded)`` of dictionaries, eg::
@@ -378,11 +412,6 @@ class Musicmanager(_Base):
             )
 
         :param filepaths: a list of filepaths, or a single filepath.
-        :param transcode_quality: if int, pass to ffmpeg/avconv ``-q:a`` for libmp3lame
-          (`lower-better int,
-          <http://trac.ffmpeg.org/wiki/Encoding%20VBR%20(Variable%20Bit%20Rate)%20mp3%20audio>`__).
-          If string, pass to ffmpeg/avconv ``-b:a`` (eg ``'128k'`` for an average bitrate of 128k).
-          The default is 320kbps cbr (the highest possible quality).
 
         :param enable_matching: if ``True``, attempt to use `scan and match
           <http://support.google.com/googleplay/bin/answer.py?hl=en&answer=2920799&topic=2450455>`__
@@ -394,13 +423,21 @@ class Musicmanager(_Base):
           They would have to be deleted and reuploaded with matching disabled
           (or with the Music Manager).
           Fixing matches from gmusicapi may be supported in a future release; see issue `#89
-          <https://github.com/simon-weber/Unofficial-Google-Music-API/issues/89>`__.
+          <https://github.com/simon-weber/gmusicapi/issues/89>`__.
+
+        :param enable_transcoding:
+          if ``False``, non-MP3 files that aren't matched using `scan and match
+          <http://support.google.com/googleplay/bin/answer.py?hl=en&answer=2920799&topic=2450455>`__
+          will not be uploaded.
+
+        :param transcode_quality: if int, pass to ffmpeg/avconv ``-q:a`` for libmp3lame
+          (`lower-better int,
+          <http://trac.ffmpeg.org/wiki/Encoding%20VBR%20(Variable%20Bit%20Rate)%20mp3%20audio>`__).
+          If string, pass to ffmpeg/avconv ``-b:a`` (eg ``'128k'`` for an average bitrate of 128k).
+          The default is 320kbps cbr (the highest possible quality).
 
         All Google-supported filetypes are supported; see `Google's documentation
         <http://support.google.com/googleplay/bin/answer.py?hl=en&answer=1100462>`__.
-
-        Unlike Google's Music Manager, this function will currently allow the same song to
-        be uploaded more than once if its tags are changed. This is subject to change in the future.
 
         If ``PERMANENT_ERROR`` is given as a not_uploaded reason, attempts to reupload will never
         succeed. The file will need to be changed before the server will reconsider it; the easiest
@@ -463,7 +500,7 @@ class Musicmanager(_Base):
 
             bogus_sample = None
             if not enable_matching:
-                bogus_sample = ''  # just send empty bytes
+                bogus_sample = b''  # just send empty bytes
 
             try:
                 res = self._make_call(musicmanager.ProvideSample,
@@ -471,7 +508,7 @@ class Musicmanager(_Base):
                                       self.uploader_id, bogus_sample)
 
             except (IOError, ValueError) as e:
-                self.logger.warning("couldn't create scan and match sample for '%s': %s",
+                self.logger.warning("couldn't create scan and match sample for '%r': %s",
                                     path, str(e))
                 not_uploaded[path] = str(e)
             else:
@@ -483,12 +520,12 @@ class Musicmanager(_Base):
             path, track = local_info[sample_res.client_track_id]
 
             if sample_res.response_code == upload_pb2.TrackSampleResponse.MATCHED:
-                self.logger.info("matched '%s' to sid %s", path, sample_res.server_track_id)
+                self.logger.info("matched '%r' to sid %s", path, sample_res.server_track_id)
 
-                if enable_matching:
-                    matched[path] = sample_res.server_track_id
-                else:
-                    self.logger.exception("'%s' was matched without matching enabled", path)
+                matched[path] = sample_res.server_track_id
+
+                if not enable_matching:
+                    self.logger.error("'%r' was matched without matching enabled", path)
 
             elif sample_res.response_code == upload_pb2.TrackSampleResponse.UPLOAD_REQUESTED:
                 to_upload[sample_res.server_track_id] = (path, track, False)
@@ -507,7 +544,7 @@ class Musicmanager(_Base):
                     # tests - being surrounded by parens is how it's matched
                     err_msg += "(%s)" % sample_res.server_track_id
 
-                self.logger.warning("upload of '%s' rejected: %s", path, err_msg)
+                self.logger.warning("upload of '%r' rejected: %s", path, err_msg)
                 not_uploaded[path] = err_msg
 
         # Send upload requests.
@@ -530,7 +567,7 @@ class Musicmanager(_Base):
                         musicmanager.GetUploadSession.process_session(session)
 
                     if got_session:
-                        self.logger.info("got an upload session for '%s'", path)
+                        self.logger.info("got an upload session for '%r'", path)
                         break
 
                     should_retry, reason, error_code = error_details
@@ -546,7 +583,7 @@ class Musicmanager(_Base):
                 else:
                     err_msg = "GetUploadSession error %s: %s" % (error_code, reason)
 
-                    self.logger.warning("giving up on upload session for '%s': %s", path, err_msg)
+                    self.logger.warning("giving up on upload session for '%r': %s", path, err_msg)
                     not_uploaded[path] = err_msg
 
                     continue  # to next upload
@@ -560,12 +597,16 @@ class Musicmanager(_Base):
                 content_type = external.get('content_type', 'audio/mpeg')
 
                 if track.original_content_type != locker_pb2.Track.MP3:
-                    try:
-                        self.logger.info("transcoding '%s' to mp3", path)
-                        contents = utils.transcode_to_mp3(path, quality=transcode_quality)
-                    except (IOError, ValueError) as e:
-                        self.logger.warning("error transcoding %s: %s", path, e)
-                        not_uploaded[path] = "transcoding error: %s" % e
+                    if enable_transcoding:
+                        try:
+                            self.logger.info("transcoding '%r' to mp3", path)
+                            contents = utils.transcode_to_mp3(path, quality=transcode_quality)
+                        except (IOError, ValueError) as e:
+                            self.logger.warning("error transcoding %r: %s", path, e)
+                            not_uploaded[path] = "transcoding error: %s" % e
+                            continue
+                    else:
+                        not_uploaded[path] = "transcoding disabled"
                         continue
                 else:
                     with open(path, 'rb') as f:
@@ -579,7 +620,7 @@ class Musicmanager(_Base):
                     uploaded[path] = server_id
                 else:
                     # 404 == already uploaded? serverside check on clientid?
-                    self.logger.debug("could not finalize upload of '%s'. response: %s",
+                    self.logger.debug("could not finalize upload of '%r'. response: %s",
                                       path, upload_response)
                     not_uploaded[path] = 'could not finalize upload; details in log'
 

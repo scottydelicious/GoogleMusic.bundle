@@ -61,7 +61,7 @@ def is_valid_apev2_key(key):
 #  1: Item contains binary information
 #  2: Item is a locator of external stored information [e.g. URL]
 #  3: reserved"
-TEXT, BINARY, EXTERNAL = range(3)
+TEXT, BINARY, EXTERNAL = xrange(3)
 
 HAS_HEADER = 1 << 31
 HAS_NO_FOOTER = 1 << 30
@@ -273,11 +273,9 @@ class APEv2(_CIDictProxy, Metadata):
         """Load tags from a filename."""
 
         self.filename = filename
-        fileobj = open(filename, "rb")
-        try:
+        with open(filename, "rb") as fileobj:
             data = _APEv2Data(fileobj)
-        finally:
-            fileobj.close()
+
         if data.tag:
             self.clear()
             self.__parse_tag(data.tag, data.items)
@@ -459,13 +457,11 @@ class APEv2(_CIDictProxy, Metadata):
         """Remove tags from a file."""
 
         filename = filename or self.filename
-        fileobj = open(filename, "r+b")
-        try:
+        with open(filename, "r+b") as fileobj:
             data = _APEv2Data(fileobj)
             if data.start is not None and data.size is not None:
                 delete_bytes(fileobj, data.end - data.start, data.start)
-        finally:
-            fileobj.close()
+
         self.clear()
 
 
@@ -702,7 +698,7 @@ class APEv2File(FileType):
         if self.tags is None:
             self.tags = APEv2()
         else:
-            raise ValueError("%r already has tags: %r" % (self, self.tags))
+            raise error("%r already has tags: %r" % (self, self.tags))
 
     @staticmethod
     def score(filename, fileobj, header):

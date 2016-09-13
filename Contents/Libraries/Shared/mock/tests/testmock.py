@@ -2,15 +2,13 @@
 # E-mail: fuzzyman AT voidspace DOT org DOT uk
 # http://www.voidspace.org.uk/python/mock/
 
-import unittest2 as unittest
-from mock.tests.support import (
-    callable, inPy3k, is_instance, next
-)
-
 import copy
 import pickle
 import sys
 import tempfile
+
+import six
+import unittest2 as unittest
 
 import mock
 from mock import (
@@ -20,6 +18,9 @@ from mock import (
     create_autospec
 )
 from mock.mock import _CallList
+from mock.tests.support import (
+    callable, is_instance, next
+)
 
 
 try:
@@ -325,6 +326,9 @@ class MockTest(unittest.TestCase):
         self.assertEqual(mock.call_args,
                          ((sentinel.Arg,), {"kw": sentinel.Kwarg}))
 
+        # Comparing call_args to a long sequence should not raise
+        # an exception. See issue 24857.
+        self.assertFalse(mock.call_args == "a long sequence")
 
     def test_assert_called_with(self):
         mock = Mock()
@@ -663,7 +667,7 @@ class MockTest(unittest.TestCase):
         copy.copy(Mock())
 
 
-    @unittest.skipIf(inPy3k, "no old style classes in Python 3")
+    @unittest.skipIf(six.PY3, "no old style classes in Python 3")
     def test_spec_old_style_classes(self):
         class Foo:
             bar = 7
@@ -677,7 +681,7 @@ class MockTest(unittest.TestCase):
         self.assertRaises(AttributeError, lambda: mock.foo)
 
 
-    @unittest.skipIf(inPy3k, "no old style classes in Python 3")
+    @unittest.skipIf(six.PY3, "no old style classes in Python 3")
     def test_spec_set_old_style_classes(self):
         class Foo:
             bar = 7
@@ -1283,6 +1287,27 @@ class MockTest(unittest.TestCase):
         m.hello()
         with self.assertRaises(AssertionError):
             m.hello.assert_not_called()
+
+    def test_assert_called(self):
+        m = Mock()
+        with self.assertRaises(AssertionError):
+            m.hello.assert_called()
+        m.hello()
+        m.hello.assert_called()
+
+        m.hello()
+        m.hello.assert_called()
+
+    def test_assert_called_once(self):
+        m = Mock()
+        with self.assertRaises(AssertionError):
+            m.hello.assert_called_once()
+        m.hello()
+        m.hello.assert_called_once()
+
+        m.hello()
+        with self.assertRaises(AssertionError):
+            m.hello.assert_called_once()
 
     #Issue21256 printout of keyword args should be in deterministic order
     def test_sorted_call_signature(self):

@@ -112,11 +112,17 @@ class SchemaValidator(object):
         disallow properties not listed in the schema definition
     :param apply_default_to_data: defaults to False, set to True to modify the
         data in case the schema definition includes a "default" property
+    :param fail_fast: defaults to True, set to False if you prefer to get
+        all validation errors back instead of only the first one
+    :param remove_unknown_properties: defaults to False, set to True to
+        filter out properties not listed in the schema definition. Only applies
+        when disallow_unknown_properties is False.
     '''
 
     def __init__(self, format_validators=None, required_by_default=True,
                  blank_by_default=False, disallow_unknown_properties=False,
-                 apply_default_to_data=False, fail_fast=True):
+                 apply_default_to_data=False, fail_fast=True,
+                 remove_unknown_properties=False):
 
         self._format_validators = {}
         self._errors = []
@@ -134,6 +140,9 @@ class SchemaValidator(object):
         self.disallow_unknown_properties = disallow_unknown_properties
         self.apply_default_to_data = apply_default_to_data
         self.fail_fast = fail_fast
+
+        # disallow_unknown_properties takes precedence over remove_unknown_properties
+        self.remove_unknown_properties = remove_unknown_properties
 
     def register_format_validator(self, format_name, format_validator_fun):
         self._format_validators[format_name] = format_validator_fun
@@ -178,6 +187,7 @@ class SchemaValidator(object):
             self._errors.append(err)
 
     def _validate_unknown_properties(self, schema, data, fieldname):
+        """Raise a SchemaError when unknown fields are found."""
         schema_properties = set(schema)
         data_properties = set(data)
         delta = data_properties - schema_properties
@@ -185,6 +195,15 @@ class SchemaValidator(object):
             unknowns = ', '.join(['"{}"'.format(x) for x in delta])
             raise SchemaError('Unknown properties for field "{fieldname}": {unknowns}'.format(
                 fieldname=fieldname, unknowns=unknowns))
+
+    def _remove_unknown_properties(self, schema, data, fieldname):
+        """Remove the unknown fields from the data."""
+        schema_properties = set(schema)
+        data_properties = set(data)
+        unknown_fields = data_properties - schema_properties
+
+        for unknown_field in unknown_fields:
+            del data[unknown_field]
 
     def validate_type(self, x, fieldname, schema, path, fieldtype=None):
         ''' Validates that the fieldtype specified is correct for the given data '''
@@ -204,7 +223,15 @@ class SchemaValidator(object):
                 errorlist = []
                 for eachtype in fieldtype:
                     try:
+                        # if fail_fast is False, _error will not rais an exception.
+                        # need to monitor the _errors list as well
+                        errors = self._errors[:]
                         self.validate_type(x, fieldname, eachtype, path, eachtype)
+                        if len(self._errors) > len(errors):
+                          # an exception was raised.
+                          # remove the error from self.errors and raise it here
+                          raise self._errors.pop()
+
                         datavalid = True
                         break
                     except ValidationError as err:
@@ -238,10 +265,12 @@ class SchemaValidator(object):
 
                     if self.disallow_unknown_properties:
                         self._validate_unknown_properties(properties, value, fieldname)
+                    elif self.remove_unknown_properties:
+                        self._remove_unknown_properties(properties, value, fieldname)
 
-                    for eachProp in properties:
-                        self.__validate(eachProp, value, properties.get(eachProp),
-                                        path + '.' + eachProp)
+                    for property in properties:
+                        self.__validate(property, value, properties.get(property),
+                                        path + '.' + property)
                 else:
                     raise SchemaError("Properties definition of field '{}' is not an object"
                                       .format(fieldname))
@@ -270,6 +299,9 @@ class SchemaValidator(object):
                         if self.disallow_unknown_properties and 'properties' in items:
                             self._validate_unknown_properties(items['properties'], item,
                                                               fieldname)
+                        elif self.remove_unknown_properties and 'properties' in items:
+                            self._remove_unknown_properties(items['properties'], item,
+                                                            fieldname)
 
                         self.__validate("[list item]", {"[list item]": item}, items,
                                         '{}[{}]'.format(path, index))
@@ -455,7 +487,9 @@ class SchemaValidator(object):
         Validates that the given field, if a string, matches the given regular expression.
         '''
         value = x.get(fieldname)
-        if isinstance(value, _str_type) and (isinstance(pattern, _str_type) and not re.match(pattern, value) or not isinstance(pattern, _str_type) and not pattern.match(value)):
+        if (isinstance(value, _str_type) and (isinstance(pattern, _str_type) and not
+                re.match(pattern, value) or not isinstance(pattern, _str_type) and not
+                pattern.match(value))):
             self._error("does not match regular expression '{pattern}'", value, fieldname,
                         pattern=pattern, path=path)
 
@@ -501,8 +535,9 @@ class SchemaValidator(object):
                 raise SchemaError("Enumeration {!r} for field '{}' must be a container".format(
                                   options, fieldname))
             if value not in options:
-                self._error("is not in the enumeration: {options!r}", value, fieldname,
-                            options=options, path=path)
+                if not(value == '' and schema.get('blank', self.blank_by_default)):
+                    self._error("is not in the enumeration: {options!r}", value, fieldname,
+                                options=options, path=path)
 
     def validate_title(self, x, fieldname, schema, path, title=None):
         if not isinstance(title, (_str_type, type(None))):
@@ -558,13 +593,7 @@ class SchemaValidator(object):
             if 'blank' not in schema:
                 newschema['blank'] = self.blank_by_default
 
-            # iterate over schema and call all validators
-            for schemaprop in newschema:
-                validatorname = "validate_" + schemaprop
-                validator = getattr(self, validatorname, None)
-                if validator:
-                    validator(data, fieldname, schema, path, newschema.get(schemaprop))
-
+            # add default values first before checking for required fields
             if self.apply_default_to_data and 'default' in schema:
                 try:
                     self.validate_type(x={'_ds': schema['default']}, fieldname='_ds',
@@ -576,5 +605,12 @@ class SchemaValidator(object):
 
                 if fieldname not in data:
                     data[fieldname] = schema['default']
+
+            # iterate over schema and call all validators
+            for schemaprop in newschema:
+                validatorname = "validate_" + schemaprop
+                validator = getattr(self, validatorname, None)
+                if validator:
+                    validator(data, fieldname, schema, path, newschema.get(schemaprop))
 
         return data

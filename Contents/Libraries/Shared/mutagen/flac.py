@@ -26,8 +26,9 @@ import struct
 from ._vorbis import VCommentDict
 import mutagen
 
-from ._compat import cBytesIO, endswith, chr_
-from mutagen._util import insert_bytes, MutagenError
+from ._compat import cBytesIO, endswith, chr_, xrange
+from mutagen._util import resize_bytes, MutagenError, get_size
+from mutagen._tags import PaddingInfo
 from mutagen.id3 import BitPaddedInt
 from functools import reduce
 
@@ -83,6 +84,15 @@ class MetadataBlock(object):
     """
 
     _distrust_size = False
+    """For block types setting this, we don't trust the size field and
+    use the size of the content instead."""
+
+    _invalid_overflow_size = -1
+    """In case the real size was bigger than what is representable by the
+    24 bit size field, we save the wrong specified size here. This can
+    only be set if _distrust_size is True"""
+
+    _MAX_SIZE = 2 ** 24 - 1
 
     def __init__(self, data):
         """Parse the given data string or file-like as a metadata block.
@@ -103,37 +113,58 @@ class MetadataBlock(object):
     def write(self):
         return self.data
 
-    @staticmethod
-    def writeblocks(blocks):
-        """Render metadata block as a byte string."""
-        data = []
-        codes = [[block.code, block.write()] for block in blocks]
-        codes[-1][0] |= 128
-        for code, datum in codes:
-            byte = chr_(code)
-            if len(datum) > 2 ** 24:
-                raise error("block is too long to write")
-            length = struct.pack(">I", len(datum))[-3:]
-            data.append(byte + length + datum)
-        return b"".join(data)
+    @classmethod
+    def _writeblock(cls, block, is_last=False):
+        """Returns the block content + header.
 
-    @staticmethod
-    def group_padding(blocks):
-        """Consolidate FLAC padding metadata blocks.
-
-        The overall size of the rendered blocks does not change, so
-        this adds several bytes of padding for each merged block.
+        Raises error.
         """
 
-        paddings = [b for b in blocks if isinstance(b, Padding)]
-        for p in paddings:
-            blocks.remove(p)
-        # total padding size is the sum of padding sizes plus 4 bytes
-        # per removed header.
-        size = sum(padding.length for padding in paddings)
-        padding = Padding()
-        padding.length = size + 4 * (len(paddings) - 1)
-        blocks.append(padding)
+        data = bytearray()
+        code = (block.code | 128) if is_last else block.code
+        datum = block.write()
+        size = len(datum)
+        if size > cls._MAX_SIZE:
+            if block._distrust_size and block._invalid_overflow_size != -1:
+                # The original size of this block was (1) wrong and (2)
+                # the real size doesn't allow us to save the file
+                # according to the spec (too big for 24 bit uint). Instead
+                # simply write back the original wrong size.. at least
+                # we don't make the file more "broken" as it is.
+                size = block._invalid_overflow_size
+            else:
+                raise error("block is too long to write")
+        assert not size > cls._MAX_SIZE
+        length = struct.pack(">I", size)[-3:]
+        data.append(code)
+        data += length
+        data += datum
+        return data
+
+    @classmethod
+    def _writeblocks(cls, blocks, available, cont_size, padding_func):
+        """Render metadata block as a byte string."""
+
+        # write everything except padding
+        data = bytearray()
+        for block in blocks:
+            if isinstance(block, Padding):
+                continue
+            data += cls._writeblock(block)
+        blockssize = len(data)
+
+        # take the padding overhead into account. we always add one
+        # to make things simple.
+        padding_block = Padding()
+        blockssize += len(cls._writeblock(padding_block))
+
+        # finally add a padding block
+        info = PaddingInfo(available - blockssize, cont_size)
+        padding_block.length = min(info._get_padding(padding_func),
+                                   cls._MAX_SIZE)
+        data += cls._writeblock(padding_block, is_last=True)
+
+        return data
 
 
 class StreamInfo(MetadataBlock, mutagen.StreamInfo):
@@ -224,7 +255,7 @@ class StreamInfo(MetadataBlock, mutagen.StreamInfo):
         return f.getvalue()
 
     def pprint(self):
-        return "FLAC, %.2f seconds, %d Hz" % (self.length, self.sample_rate)
+        return u"FLAC, %.2f seconds, %d Hz" % (self.length, self.sample_rate)
 
 
 class SeekPoint(tuple):
@@ -439,7 +470,7 @@ class CueSheet(MetadataBlock):
         self.lead_in_samples = lead_in_samples
         self.compact_disc = bool(flags & 0x80)
         self.tracks = []
-        for i in range(num_tracks):
+        for i in xrange(num_tracks):
             track = data.read(self.__CUESHEET_TRACK_SIZE)
             start_offset, track_number, isrc_padded, flags, num_indexes = \
                 struct.unpack(self.__CUESHEET_TRACK_FORMAT, track)
@@ -448,7 +479,7 @@ class CueSheet(MetadataBlock):
             pre_emphasis = bool(flags & 0x40)
             val = CueSheetTrack(
                 track_number, start_offset, isrc, type_, pre_emphasis)
-            for j in range(num_indexes):
+            for j in xrange(num_indexes):
                 index = data.read(self.__CUESHEET_TRACKINDEX_SIZE)
                 index_offset, index_number = struct.unpack(
                     self.__CUESHEET_TRACKINDEX_FORMAT, index)
@@ -513,7 +544,7 @@ class Picture(MetadataBlock):
         with open("Folder.jpg", "rb") as f:
             pic.data = f.read()
 
-        pic.type = APICType.COVER_FRONT
+        pic.type = id3.PictureType.COVER_FRONT
         pic.mime = u"image/jpeg"
         pic.width = 500
         pic.height = 500
@@ -581,8 +612,7 @@ class Padding(MetadataBlock):
 
     To avoid rewriting the entire FLAC file when editing comments,
     metadata is often padded. Padding should occur at the end, and no
-    more than one padding block should be in any FLAC file. Mutagen
-    handles this with MetadataBlock.group_padding.
+    more than one padding block should be in any FLAC file.
     """
 
     code = 1
@@ -619,14 +649,18 @@ class FLAC(mutagen.FileType):
 
     Attributes:
 
-    * info -- stream information (length, bitrate, sample rate)
-    * tags -- metadata tags, if any
     * cuesheet -- CueSheet object, if any
     * seektable -- SeekTable object, if any
     * pictures -- list of embedded pictures
     """
 
-    _mimes = ["audio/x-flac", "application/x-flac"]
+    _mimes = ["audio/flac", "audio/x-flac", "application/x-flac"]
+
+    info = None
+    """A `StreamInfo`"""
+
+    tags = None
+    """A `VCommentDict`"""
 
     METADATA_BLOCKS = [StreamInfo, Padding, None, SeekTable, VCFLACDict,
                        CueSheet, Picture]
@@ -655,10 +689,14 @@ class FLAC(mutagen.FileType):
             # so we have to too.  Instead of parsing the size
             # given, parse an actual Vorbis comment, leaving
             # fileobj in the right position.
-            # http://code.google.com/p/mutagen/issues/detail?id=52
+            # https://github.com/quodlibet/mutagen/issues/52
             # ..same for the Picture block:
-            # http://code.google.com/p/mutagen/issues/detail?id=106
+            # https://github.com/quodlibet/mutagen/issues/106
+            start = fileobj.tell()
             block = block_type(fileobj)
+            real_size = fileobj.tell() - start
+            if real_size > MetadataBlock._MAX_SIZE:
+                block._invalid_overflow_size = size
         else:
             data = fileobj.read(size)
             block = block_type(data)
@@ -699,12 +737,12 @@ class FLAC(mutagen.FileType):
         """
         if filename is None:
             filename = self.filename
-        for s in list(self.metadata_blocks):
-            if isinstance(s, VCFLACDict):
-                self.metadata_blocks.remove(s)
-                self.tags = None
-                self.save()
-                break
+
+        if self.tags is not None:
+            self.metadata_blocks.remove(self.tags)
+            self.save(padding=lambda x: 0)
+            self.metadata_blocks.append(self.tags)
+            self.tags.clear()
 
     vc = property(lambda s: s.tags, doc="Alias for tags; don't use this.")
 
@@ -749,7 +787,7 @@ class FLAC(mutagen.FileType):
 
         return [b for b in self.metadata_blocks if b.code == Picture.code]
 
-    def save(self, filename=None, deleteid3=False):
+    def save(self, filename=None, deleteid3=False, padding=None):
         """Save metadata blocks to a file.
 
         If no filename is given, the one most recently loaded is used.
@@ -757,46 +795,28 @@ class FLAC(mutagen.FileType):
 
         if filename is None:
             filename = self.filename
-        f = open(filename, 'rb+')
 
-        try:
-            # Ensure we've got padding at the end, and only at the end.
-            # If adding makes it too large, we'll scale it down later.
-            self.metadata_blocks.append(Padding(b'\x00' * 1020))
-            MetadataBlock.group_padding(self.metadata_blocks)
-
+        with open(filename, 'rb+') as f:
             header = self.__check_header(f)
+            audio_offset = self.__find_audio_offset(f)
             # "fLaC" and maybe ID3
-            available = self.__find_audio_offset(f) - header
-            data = MetadataBlock.writeblocks(self.metadata_blocks)
+            available = audio_offset - header
 
             # Delete ID3v2
             if deleteid3 and header > 4:
                 available += header - 4
                 header = 4
 
-            if len(data) > available:
-                # If we have too much data, see if we can reduce padding.
-                padding = self.metadata_blocks[-1]
-                newlength = padding.length - (len(data) - available)
-                if newlength > 0:
-                    padding.length = newlength
-                    data = MetadataBlock.writeblocks(self.metadata_blocks)
-                    assert len(data) == available
+            content_size = get_size(f) - audio_offset
+            assert content_size >= 0
+            data = MetadataBlock._writeblocks(
+                self.metadata_blocks, available, content_size, padding)
+            data_size = len(data)
 
-            elif len(data) < available:
-                # If we have too little data, increase padding.
-                self.metadata_blocks[-1].length += (available - len(data))
-                data = MetadataBlock.writeblocks(self.metadata_blocks)
-                assert len(data) == available
-
-            if len(data) != available:
-                # We couldn't reduce the padding enough.
-                diff = (len(data) - available)
-                insert_bytes(f, diff, header)
-
+            resize_bytes(f, available, data_size, header)
             f.seek(header - 4)
-            f.write(b"fLaC" + data)
+            f.write(b"fLaC")
+            f.write(data)
 
             # Delete ID3v1
             if deleteid3:
@@ -808,8 +828,6 @@ class FLAC(mutagen.FileType):
                     if f.read(3) == b"TAG":
                         f.seek(-128, 2)
                         f.truncate()
-        finally:
-            f.close()
 
     def __find_audio_offset(self, fileobj):
         byte = 0x00
@@ -830,6 +848,11 @@ class FLAC(mutagen.FileType):
         return fileobj.tell()
 
     def __check_header(self, fileobj):
+        """Returns the offset of the flac block start
+        (skipping id3 tags if found). The passed fileobj will be advanced to
+        that offset as well.
+        """
+
         size = 4
         header = fileobj.read(4)
         if header != b"fLaC":

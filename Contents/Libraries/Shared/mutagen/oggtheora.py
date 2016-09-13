@@ -20,7 +20,8 @@ import struct
 
 from mutagen import StreamInfo
 from mutagen._vorbis import VCommentDict
-from mutagen._util import cdata
+from mutagen._util import cdata, get_size
+from mutagen._tags import PaddingInfo
 from mutagen.ogg import OggPage, OggFileType, error as OggError
 
 
@@ -33,15 +34,16 @@ class OggTheoraHeaderError(error):
 
 
 class OggTheoraInfo(StreamInfo):
-    """Ogg Theora stream information.
-
-    Attributes:
-
-    * length - file length in seconds, as a float
-    * fps - video frames per second, as a float
-    """
+    """Ogg Theora stream information."""
 
     length = 0
+    """File length in seconds, as a float"""
+
+    fps = 0
+    """Video frames per second, as a float"""
+
+    bitrate = 0
+    """Bitrate in bps (int)"""
 
     def __init__(self, fileobj):
         page = OggPage(fileobj)
@@ -69,7 +71,8 @@ class OggTheoraInfo(StreamInfo):
         self.length = frames / float(self.fps)
 
     def pprint(self):
-        return "Ogg Theora, %.2f seconds, %d bps" % (self.length, self.bitrate)
+        return u"Ogg Theora, %.2f seconds, %d bps" % (self.length,
+                                                      self.bitrate)
 
 
 class OggTheoraCommentDict(VCommentDict):
@@ -84,9 +87,10 @@ class OggTheoraCommentDict(VCommentDict):
                 pages.append(page)
                 complete = page.complete or (len(page.packets) > 1)
         data = OggPage.to_packets(pages)[0][7:]
-        super(OggTheoraCommentDict, self).__init__(data + b"\x01")
+        super(OggTheoraCommentDict, self).__init__(data, framing=False)
+        self._padding = len(data) - self._size
 
-    def _inject(self, fileobj):
+    def _inject(self, fileobj, padding_func):
         """Write tag data into the Theora comment packet/page."""
 
         fileobj.seek(0)
@@ -102,9 +106,16 @@ class OggTheoraCommentDict(VCommentDict):
 
         packets = OggPage.to_packets(old_pages, strict=False)
 
-        packets[0] = b"\x81theora" + self.write(framing=False)
+        content_size = get_size(fileobj) - len(packets[0])  # approx
+        vcomment_data = b"\x81theora" + self.write(framing=False)
+        padding_left = len(packets[0]) - len(vcomment_data)
 
-        new_pages = OggPage.from_packets(packets, old_pages[0].sequence)
+        info = PaddingInfo(padding_left, content_size)
+        new_padding = info._get_padding(padding_func)
+
+        packets[0] = vcomment_data + b"\x00" * new_padding
+
+        new_pages = OggPage._from_packets_try_preserve(packets, old_pages)
         OggPage.replace(fileobj, old_pages, new_pages)
 
 
@@ -115,6 +126,12 @@ class OggTheora(OggFileType):
     _Tags = OggTheoraCommentDict
     _Error = OggTheoraHeaderError
     _mimes = ["video/x-theora"]
+
+    info = None
+    """A `OggTheoraInfo`"""
+
+    tags = None
+    """A `VCommentDict`"""
 
     @staticmethod
     def score(filename, fileobj, header):
