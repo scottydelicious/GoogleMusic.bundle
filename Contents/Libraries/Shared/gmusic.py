@@ -71,6 +71,8 @@ class GMusic(object):
         self._set_all_songs()
         for song in self.all_songs:
             thumb = None
+            if not 'title' in song:
+                continue
             letter = song['title'][0]
             artist = song['artist']
             album = song['album']

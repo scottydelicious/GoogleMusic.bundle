@@ -275,7 +275,8 @@ def ShowSongs(title, shuffle=False, page=1):
                 oc.add(GetTrack(song, song['id']))
         else:
             for song in sorted(songs, key = lambda x: x.get('title'))[start:end]:
-                oc.add(GetTrack(song, song['id']))
+                if 'title' in song:
+                    oc.add(GetTrack(song, song['id']))
 
         if end < len(songs):
             oc.add(NextPageObject(key=Callback(ShowSongs, title=title, shuffle=shuffle, page=page+1)))
